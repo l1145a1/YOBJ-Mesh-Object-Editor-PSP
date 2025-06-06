@@ -20,6 +20,7 @@ mesh_bones_header=[]
 mesh_vertice_header_offset=[]
 mesh_vertice_offset=[]
 mesh_vertice_count=[]
+mesh_vertice_flag=[]
 mesh_vertice=[]
 mesh_material_offset=[]
 mesh_material_count=[]
@@ -63,7 +64,7 @@ def padding(t):
             padding = 16  # Kalau persis di kolom 08, skip
         t.write(b'\x00' * padding)
     pass
-def read_header(b,t):
+def read_header(b):
     global mesh_count, bone_count, texture_count, mesh_header_offset, bone_offset, texture_offset, model_name_offset, model_count, header
     b.seek(4)
     print(f"Read Header at offset {b.tell()}, Lenght 64 Bytes")
@@ -86,7 +87,7 @@ def read_header(b,t):
     model_count=struct.unpack('<I', b.read(4))[0]
     print(f"Read Model Count at offset {b.tell()-4}, Value {model_count}")
     pass
-def read_mesh_header(b,t):
+def read_mesh_header(b):
     global mesh_count, mesh_header_offset, new_mesh_header_offset, mesh_header
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
@@ -94,7 +95,7 @@ def read_mesh_header(b,t):
         mesh_header.append(b.read(64))
         pass
     pass
-def read_bones_mesh_offset_header(b,t):
+def read_bones_mesh_offset_header(b):
     global mesh_count, mesh_header_offset, mesh_bones_header, mesh_bones_header_offset, mesh_bones_header
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
@@ -104,7 +105,7 @@ def read_bones_mesh_offset_header(b,t):
         b.read(52)
         pass
     pass
-def read_bones_mesh_header(b,t):
+def read_bones_mesh_header(b):
     global mesh_count, mesh_header_offset, mesh_bones_header, mesh_bones_header_offset, mesh_bones_header
     for i in range(mesh_count):
         b.seek(mesh_bones_header_offset[i]+8)
@@ -112,7 +113,7 @@ def read_bones_mesh_header(b,t):
         mesh_bones_header.append(b.read(48))
         pass
     pass
-def read_vertice_mesh_header(b,t):
+def read_vertice_mesh_header(b):
     global mesh_count, mesh_header_offset, mesh_bones_header, mesh_vertice_header_offset, mesh_vertice_header
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
@@ -135,16 +136,38 @@ def read_vertice_mesh_header(b,t):
         mesh_vertice_offset.append(struct.unpack('<I', b.read(4))[0])
         pass
     pass
-def read_vertice_mesh(b,t):
+def read_vertice_flag_header(b):
+    global mesh_count, mesh_header_offset, mesh_bones_header, mesh_vertice_header_offset, mesh_vertice_header, mesh_vertice_flag
+    b.seek(mesh_header_offset+8)
+    for i in range(mesh_count):
+        b.read(28)
+        mesh_vertice_flag.append(struct.unpack('<I', b.read(4))[0])
+        print(f"Read Object {i} Vertice Flag: {mesh_vertice_flag[i]}")
+        b.read(32)
+        pass
+    pass
+def read_vertice_mesh(b):
     for i in range(mesh_count):
         b.seek(mesh_vertice_offset[i]+8)
         offset=b.tell()
-        vertice_lenght=mesh_vertice_count[i]*68
+        #kalkulasi panjang vertice
+        flag_booelan=mesh_vertice_flag[i] & 1536 !=0
+        print(f"Convert Flag to Boolean: {flag_booelan}")
+        flag_binary=format(mesh_vertice_flag[i], '032b')[::-1]
+        print(f"Convert Flag to Binary: {flag_binary}")
+        flag_decode=int(flag_binary[16:13:-1], 2)
+        print(f"Decode Flag Binary to Integer: {flag_decode}")
+        if flag_booelan:
+            vertice_lenght=(flag_decode+10)*4
+            vertice_lenght=vertice_lenght*mesh_vertice_count[i]
+        else:
+            vertice_lenght=36*mesh_vertice_count[i]
+        print(f"Vertice Lenght Total: {vertice_lenght}")
         mesh_vertice.append(b.read(vertice_lenght))
         print(f"Read Mesh Vertice, Object {i}, Offset {offset}, Lenght {vertice_lenght}")
         pass
     pass
-def read_material_header_mesh(b,t):
+def read_material_header_mesh(b):
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
         b.read(4)
@@ -155,7 +178,7 @@ def read_material_header_mesh(b,t):
         b.read(48)
         pass
     pass
-def read_material_mesh(b,t):
+def read_material_mesh(b):
     for i in range(mesh_count):
         b.seek(mesh_material_offset[i]+8)
         mesh_material.append([])
@@ -166,7 +189,7 @@ def read_material_mesh(b,t):
             pass
         pass
     pass
-def read_faces_mesh(b,t,i):
+def read_faces_mesh(b,i):
     b.seek(mesh_material_offset[i]+8)
     mesh_faces_count.append([])
     mesh_faces_header_offset.append([])
@@ -206,7 +229,7 @@ def read_faces_mesh(b,t,i):
             pass
         pass
     pass
-def read_bones(b,t):
+def read_bones(b):
     global bone_count, bone_offset
     b.seek(bone_offset+8)
     print(f"Read {bone_count} Bones at offset {b.tell()}")
@@ -214,7 +237,7 @@ def read_bones(b,t):
         bone.append(b.read(80))
         pass
         pass
-def read_texture(b,t):
+def read_texture(b):
     global texture_count, texture_offset
     b.seek(texture_offset+8)
     print(f"Read {texture_count} Texture at offset {b.tell()}")
@@ -222,18 +245,18 @@ def read_texture(b,t):
         texture.append(b.read(16))
         pass
         pass
-def read_model_name(b,t):
+def read_model_name(b):
     global model_name_offset
     b.seek(model_name_offset+8)
     print(f"Read Model Name at offset {b.tell()}")
     model_name=b.read(16).decode('ascii')
     pass
-def write_header(b,t):
+def write_header(t):
     t.seek(0,os.SEEK_END)
     print(f"Write Header at offset {t.tell()}")
     t.write(header)
     pass
-def write_mesh_header(b,t):
+def write_mesh_header(t):
     global mesh_count, mesh_header_offset, new_mesh_header_offset, mesh_header
     t.seek(0,os.SEEK_END)
     for i in range(mesh_count):
@@ -248,7 +271,7 @@ def write_mesh_header(b,t):
     t.write(struct.pack('<I',new_mesh_header_offset[0]-8))
     print(f"Write New Mesh Header Offset at offset 36, Value {new_mesh_header_offset[0]-8}")
     pass
-def write_bones_mesh_header(b,t,i):
+def write_bones_mesh_header(t,i):
     t.seek(0,os.SEEK_END)
     new_mesh_bones_header_offset.append(t.tell())
     t.write(mesh_bones_header[i])
@@ -258,7 +281,7 @@ def write_bones_mesh_header(b,t,i):
     t.write(struct.pack('<I',new_mesh_bones_header_offset[i]-8))
     print(f"Write New Mesh Bones Header, Object {i}, Offset {new_mesh_bones_header_offset[i]}, Lenght 48")
     pass
-def write_vertice_mesh(b,t,i):
+def write_vertice_mesh(t,i):
     t.seek(0,os.SEEK_END)
     new_mesh_vertice_header_offset.append(t.tell())
     t.write(b'\x00' * 4)
@@ -279,7 +302,7 @@ def write_vertice_mesh(b,t,i):
     t.write(struct.pack('<I',new_mesh_vertice_header_offset[i]-8))
     print(f"Write New Mesh Vertice Header, Object {i}, Offset {new_mesh_vertice_offset[i]}, Lenght {len(mesh_vertice[i])}")
     pass
-def write_material_mesh(b,t,i):
+def write_material_mesh(t,i):
     t.seek(0,os.SEEK_END)
     new_mesh_material_offset.append(t.tell())
     for j in range(mesh_material_count[i]):
@@ -291,7 +314,7 @@ def write_material_mesh(b,t,i):
     t.write(struct.pack('<I',new_mesh_material_offset[i]-8))
     print(f"Write New Mesh Material, Object {i}, Offset {new_mesh_material_offset[i]}, Lenght {len(mesh_material[i])}")
     pass
-def write_faces_mesh(b,t,i):
+def write_faces_mesh(t,i):
     new_mesh_faces_start_offset.append([])
     new_mesh_faces_header_offset.append([])
     for j in range(mesh_material_count[i]):
@@ -325,7 +348,7 @@ def write_faces_mesh(b,t,i):
         t.write(struct.pack('<I',new_mesh_faces_start_offset[i][j]-8))
         pass
         pass
-def write_bones(b,t):
+def write_bones(t):
     global bone_count, bone_offset
     t.seek(0,os.SEEK_END)
     new_bone_offset=t.tell()
@@ -339,7 +362,7 @@ def write_bones(b,t):
     all_offset.append(t.tell())
     t.write(struct.pack('<I',new_bone_offset-8))
     pass
-def write_texture(b,t):
+def write_texture(t):
     global texture_count, texture_offset
     t.seek(0,os.SEEK_END)
     new_texture_offset=t.tell()
@@ -353,7 +376,7 @@ def write_texture(b,t):
     all_offset.append(t.tell())
     t.write(struct.pack('<I',new_texture_offset-8))
     pass
-def write_model_name(b,t):
+def write_model_name(t):
     global model_name_offset
     t.seek(0,os.SEEK_END)
     new_model_name_offset=t.tell()
@@ -415,7 +438,7 @@ def print_mesh():
         print(f"Object {i}, Vertice {mesh_vertice_count[i]}, Material {mesh_material_count[i]}")
         pass
     pass
-def duplicate_mesh(b,t,i):
+def duplicate_mesh(b,i):
     global mesh_count
     # mesh count+1
     mesh_count=mesh_count+1
@@ -438,9 +461,9 @@ def duplicate_mesh(b,t,i):
     mesh_material_offset.append(mesh_material_offset[i])
     mesh_material.append(mesh_material[i])
 
-    read_faces_mesh(b,t,mesh_count-1)
+    read_faces_mesh(b,mesh_count-1)
     pass
-def remove_mesh(b,t,i):
+def remove_mesh(t,i):
     global mesh_count
 
     # mesh count+1
@@ -489,6 +512,26 @@ def main():
         print(f"Cannot open {sys.argv[1]}")
         return 1
 
+    #membaca file base_file
+    read_header(base_file)
+    read_model_name(base_file)
+    read_bones(base_file)
+    read_texture(base_file)
+    read_mesh_header(base_file)
+    read_bones_mesh_offset_header(base_file)
+    read_bones_mesh_header(base_file)
+    read_vertice_mesh_header(base_file)
+    read_vertice_flag_header(base_file)
+    read_vertice_mesh(base_file)
+    read_material_header_mesh(base_file)
+    read_material_mesh(base_file)
+    for i in range(mesh_count):
+        read_faces_mesh(base_file,i)
+        pass
+    print_mesh()
+
+    #menjalankan perintah spesifik
+    a=int(input("Answer: "))
     try:
         target_file = open(sys.argv[2], "wb")
     except IOError:
@@ -496,42 +539,25 @@ def main():
         return 1
 
     make_new_file(target_file)
-
     try:
         target_file = open(sys.argv[2], "r+b")
     except IOError:
         print(f"Cannot open {sys.argv[2]}")
         return 1
+    #contoh perintah spesifik
+    duplicate_mesh(base_file,a)
 
-    #dijalankan ketika program mulai
-    read_header(base_file,target_file)
-    read_model_name(base_file,target_file)
-    read_bones(base_file,target_file)
-    read_texture(base_file,target_file)
-    read_mesh_header(base_file,target_file)
-    read_bones_mesh_offset_header(base_file,target_file)
-    read_bones_mesh_header(base_file,target_file)
-    read_vertice_mesh_header(base_file,target_file)
-    read_vertice_mesh(base_file,target_file)
-    read_material_header_mesh(base_file,target_file)
-    read_material_mesh(base_file,target_file)
+    #menulis perubahan ke target_file
+    write_header(target_file)
+    write_mesh_header(target_file)
     for i in range(mesh_count):
-        read_faces_mesh(base_file,target_file,i)
-        pass
-    print_mesh()
-    a=int(input("Answer: "))
-    remove_mesh(base_file,target_file,a)
-    #dijalankan setelah menu dipilih
-    write_header(base_file,target_file)
-    write_mesh_header(base_file,target_file)
-    for i in range(mesh_count):
-        write_bones_mesh_header(base_file,target_file,i)
-        write_vertice_mesh(base_file,target_file,i)
-        write_material_mesh(base_file,target_file,i)
-        write_faces_mesh(base_file,target_file,i)
-    write_bones(base_file,target_file)
-    write_texture(base_file,target_file)
-    write_model_name(base_file,target_file)
+        write_bones_mesh_header(target_file,i)
+        write_vertice_mesh(target_file,i)
+        write_material_mesh(target_file,i)
+        write_faces_mesh(target_file,i)
+    write_bones(target_file)
+    write_texture(target_file)
+    write_model_name(target_file)
     generate_pof0(target_file)
     base_file.close()
     target_file.close()
