@@ -17,11 +17,22 @@ model_count=0
 mesh_header=[]
 mesh_bones_header_offset=[]
 mesh_bones_header=[]
-mesh_vertice_header_offset=[]
-mesh_vertice_offset=[]
-mesh_vertice_count=[]
-mesh_vertice_flag=[]
-mesh_vertice=[]
+mesh_data_header_offset=[]
+mesh_data_offset=[]
+mesh_data_count=[]
+mesh_data_flag=[]
+mesh_data=[]
+mesh_flag_boolean=[]
+mesh_flag_binary=[]
+mesh_flag_decode=[]
+mesh_data_lenght=[]
+mesh_vertex_offset = []
+mesh_vertex_x=[]
+mesh_vertex_y=[]
+mesh_vertex_z=[]
+mesh_uv_offset = []
+mesh_uv_x=[]
+mesh_uv_y=[]
 mesh_material_offset=[]
 mesh_material_count=[]
 mesh_material=[]
@@ -34,9 +45,9 @@ mesh_faces_header=[]
 mesh_face=[]
 new_mesh_header_offset=[]
 new_mesh_bones_header_offset=[]
-new_mesh_vertice_header_offset=[]
-new_mesh_vertice_offset=[]
-new_mesh_vertice_count=[]
+new_mesh_data_header_offset=[]
+new_mesh_data_offset=[]
+new_mesh_data_count=[]
 new_mesh_material_offset=[]
 new_mesh_material_count=[]
 new_mesh_material=[]
@@ -47,7 +58,6 @@ bone=[]
 texture=[]
 model_name=''
 FILE_HEADER = 8
-
 def make_new_file(t):
     t.seek(0)
     t.write(b'YOBJ')
@@ -113,60 +123,115 @@ def read_bones_mesh_header(b):
         mesh_bones_header.append(b.read(48))
         pass
     pass
-def read_vertice_mesh_header(b):
-    global mesh_count, mesh_header_offset, mesh_bones_header, mesh_vertice_header_offset, mesh_vertice_header
+def read_mesh_data_header(b):
+    global mesh_count, mesh_header_offset, mesh_bones_header, mesh_data_header_offset, mesh_data_header
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
         b.read(24)
-        mesh_vertice_header_offset.append(struct.unpack('<I', b.read(4))[0])
+        mesh_data_header_offset.append(struct.unpack('<I', b.read(4))[0])
         b.read(36)
         pass
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
         b.read(40)
-        mesh_vertice_count.append(struct.unpack('<I', b.read(4))[0])
+        mesh_data_count.append(struct.unpack('<I', b.read(4))[0])
         b.read(20)
         pass
     for i in range(mesh_count):
-        print(f"Read Mesh Vertice Header, Object {i}, Count {mesh_vertice_count[i]}, Offset {mesh_vertice_header_offset[i]}")
+        print(f"Read Mesh Data Header, Object {i}, Count {mesh_data_count[i]}, Offset {mesh_data_header_offset[i]}")
         pass
     for i in range(mesh_count):
-        b.seek(mesh_vertice_header_offset[i]+8)
-        print(f"Read Mesh Vertice Offset, Object {i}, Offset {b.tell()}")
-        mesh_vertice_offset.append(struct.unpack('<I', b.read(4))[0])
+        b.seek(mesh_data_header_offset[i]+8)
+        print(f"Read Mesh Data Offset, Object {i}, Offset {b.tell()}")
+        mesh_data_offset.append(struct.unpack('<I', b.read(4))[0])
         pass
     pass
-def read_vertice_flag_header(b):
-    global mesh_count, mesh_header_offset, mesh_bones_header, mesh_vertice_header_offset, mesh_vertice_header, mesh_vertice_flag
+def read_data_flag_header(b):
+    global mesh_count, mesh_header_offset, mesh_bones_header, mesh_data_header_offset, mesh_data_header, mesh_data_flag
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
         b.read(28)
-        mesh_vertice_flag.append(struct.unpack('<I', b.read(4))[0])
-        print(f"Read Object {i} Vertice Flag: {mesh_vertice_flag[i]}")
+        mesh_data_flag.append(struct.unpack('<I', b.read(4))[0])
+        print(f"Read Object {i} Data Flag: {mesh_data_flag[i]}")
         b.read(32)
         pass
     pass
-def read_vertice_mesh(b):
+def read_mesh_data(b):
+    global mesh_flag_boolean, mesh_flag_binary, mesh_flag_decode, mesh_data_lenght, mesh_data
     for i in range(mesh_count):
-        b.seek(mesh_vertice_offset[i]+8)
-        offset=b.tell()
-        #kalkulasi panjang vertice
-        flag_booelan=mesh_vertice_flag[i] & 1536 !=0
-        print(f"Convert Flag to Boolean: {flag_booelan}")
-        flag_binary=format(mesh_vertice_flag[i], '032b')[::-1]
-        print(f"Convert Flag to Binary: {flag_binary}")
-        flag_decode=int(flag_binary[16:13:-1], 2)
-        print(f"Decode Flag Binary to Integer: {flag_decode}")
-        if flag_booelan:
-            vertice_lenght=(flag_decode+10)*4
-            vertice_lenght=vertice_lenght*mesh_vertice_count[i]
+        b.seek(mesh_data_offset[i] + 8)
+        # Kalkulasi panjang Mesh Data
+        mesh_flag_boolean.append(mesh_data_flag[i] & 1536 != 0)
+        print(f"Convert Flag to Boolean: {mesh_flag_boolean[i]}")
+        mesh_flag_binary.append(format(mesh_data_flag[i], '032b')[::-1])
+        print(f"Convert Flag to Binary: {mesh_flag_binary[i]}")
+        mesh_flag_decode.append(int(mesh_flag_binary[i][16:13:-1], 2))
+        print(f"Decode Flag Binary to Integer: {mesh_flag_decode[i]}")
+        if mesh_flag_boolean[i]:
+            mesh_data_lenght.append((mesh_flag_decode[i] + 10) * 4)
+            mesh_data_lenght_total = mesh_data_lenght[i] * mesh_data_count[i]
         else:
-            vertice_lenght=36*mesh_vertice_count[i]
-        print(f"Vertice Lenght Total: {vertice_lenght}")
-        mesh_vertice.append(b.read(vertice_lenght))
-        print(f"Read Mesh Vertice, Object {i}, Offset {offset}, Lenght {vertice_lenght}")
-        pass
+            mesh_data_lenght.append(36)
+            mesh_data_lenght_total = 36 * mesh_data_count[i]
+        print(f"Data Length Total: {mesh_data_lenght_total}")
+        mesh_data.append(b.read(mesh_data_lenght_total))
+        print(f"Read Mesh Data, Object {i}, Offset {mesh_data_offset[i]}, Length {mesh_data_lenght[i]}")
+def read_mesh_vertex(b,i):
+    global mesh_vertex_offset, mesh_vertex_x, mesh_vertex_y, mesh_vertex_z
+    b.seek(mesh_data_offset[i] + 8)
+    mesh_vertex_offset.append([])
+    mesh_vertex_x.append([])
+    mesh_vertex_y.append([])
+    mesh_vertex_z.append([])
+    for j in range(mesh_data_count[i]):
+        # Tentukan offset berdasarkan flag
+        if mesh_flag_boolean[i]:
+            offset = (b.tell() + mesh_data_lenght[i]) - 12
+        else:
+            offset = mesh_data_offset[i] + 36
+        b.seek(offset)
+        mesh_vertex_offset[i].append(b.tell())
+        # baca X, Y, Z (float 4 byte)
+        x = struct.unpack('<f', b.read(4))[0]
+        y = struct.unpack('<f', b.read(4))[0]
+        z = struct.unpack('<f', b.read(4))[0]
+
+        mesh_vertex_x[i].append(x)
+        mesh_vertex_y[i].append(y)
+        mesh_vertex_z[i].append(z)
+
+        print(f"Read Vertex, Object {i}, Index {j}, X {x}, Y {y}, Z {z}")
     pass
+def read_mesh_uv(b, i):
+    global mesh_uv_offset, mesh_uv_x, mesh_uv_y
+    b.seek(mesh_data_offset[i] + 8)
+    mesh_uv_offset.append([])
+    mesh_uv_x.append([])
+    mesh_uv_y.append([])
+
+    for j in range(mesh_data_count[i]):
+        flag_start_offset=b.tell()
+        # Tentukan offset berdasarkan flag
+        if mesh_flag_boolean[i]:
+            offset = b.tell() + ((mesh_flag_decode[i] + 1) * 4)
+        else:
+            offset = b.tell()  # UV langsung di Mesh Data Offset
+
+        b.seek(offset)
+        mesh_uv_offset[i].append(b.tell())
+
+        # baca U, V (float 4 byte)
+        u = struct.unpack('<f', b.read(4))[0]
+        v = struct.unpack('<f', b.read(4))[0]
+
+        mesh_uv_x[i].append(u)
+        mesh_uv_y[i].append(v)
+
+        print(f"Read UV, Object {i}, Index {j}, U {u}, V {v}")
+        if mesh_flag_boolean[i]:
+            b.read(mesh_data_lenght[i]-(b.tell()-flag_start_offset))
+        else:
+            b.read(36-8)
 def read_material_header_mesh(b):
     b.seek(mesh_header_offset+8)
     for i in range(mesh_count):
@@ -189,7 +254,7 @@ def read_material_mesh(b):
             pass
         pass
     pass
-def read_faces_mesh(b,i):
+def read_mesh_faces(b,i):
     b.seek(mesh_material_offset[i]+8)
     mesh_faces_count.append([])
     mesh_faces_header_offset.append([])
@@ -222,10 +287,14 @@ def read_faces_mesh(b,i):
             mesh_face_offset[i][j].append(struct.unpack('<I', b.read(4))[0])
             pass
         for k in range(mesh_faces_count[i][j]):
-            b.seek(mesh_face_offset[i][j][k]+8)
-            lenght=mesh_face_count[i][j][k]*2
-            mesh_face[i][j].append(b.read(lenght))
-            print(f"Read Face, Object {i}, Material {j}, Face {k}, Count {mesh_face_count[i][j][k]}, Offset {mesh_face_offset[i][j][k]}")
+            b.seek(mesh_face_offset[i][j][k] + 8)
+            mesh_face[i][j].append([])  # siapkan list untuk face ke-k
+            for l in range(mesh_face_count[i][j][k]):  # jumlah elemen dalam face
+                val = struct.unpack('<H', b.read(2))[0]  # baca 2 byte
+                mesh_face[i][j][k].append(val)
+            print(f"Read Face, Object {i}, Material {j}, Faces {k}, "
+                f"Offset {mesh_face_offset[i][j][k]}, "
+                f"Values {mesh_face[i][j][k]}")
             pass
         pass
     pass
@@ -281,27 +350,71 @@ def write_bones_mesh_header(t,i):
     t.write(struct.pack('<I',new_mesh_bones_header_offset[i]-8))
     print(f"Write New Mesh Bones Header, Object {i}, Offset {new_mesh_bones_header_offset[i]}, Lenght 48")
     pass
-def write_vertice_mesh(t,i):
+def write_mesh_data(t,i):
     t.seek(0,os.SEEK_END)
-    new_mesh_vertice_header_offset.append(t.tell())
+    new_mesh_data_header_offset.append(t.tell())
     t.write(b'\x00' * 4)
     t.write(b'\x00' * 12)
-    new_mesh_vertice_offset.append(t.tell())
-    t.write(mesh_vertice[i])
+    new_mesh_data_offset.append(t.tell())
+    t.write(mesh_data[i])
     padding(t)
-    t.seek(new_mesh_vertice_header_offset[i])
+    t.seek(new_mesh_data_header_offset[i])
     all_offset.append(t.tell())
-    t.write(struct.pack('<I',new_mesh_vertice_offset[i]-8))
+    t.write(struct.pack('<I',new_mesh_data_offset[i]-8))
     t.seek(new_mesh_bones_header_offset[i])
     t.read(8)
     all_offset.append(t.tell())
-    t.write(struct.pack('<I',new_mesh_vertice_offset[i]-8))
+    t.write(struct.pack('<I',new_mesh_data_offset[i]-8))
     t.seek(new_mesh_header_offset[i])
     t.read(24)
     all_offset.append(t.tell())
-    t.write(struct.pack('<I',new_mesh_vertice_header_offset[i]-8))
-    print(f"Write New Mesh Vertice Header, Object {i}, Offset {new_mesh_vertice_offset[i]}, Lenght {len(mesh_vertice[i])}")
+    t.write(struct.pack('<I',new_mesh_data_header_offset[i]-8))
+    print(f"Write New Mesh Data Header, Object {i}, Offset {new_mesh_data_offset[i]}, Lenght {len(mesh_data[i])}")
     pass
+
+def write_mesh_vertex(t, i):
+    t.seek(new_mesh_data_offset[i])
+    print(f"Seek to offset {t.tell()} for Object {i}")
+    # tulis ulang vertex
+    for j in range(mesh_data_count[i]):
+        # skip header sesuai flag
+        if mesh_flag_boolean[i]:
+            t.read(mesh_data_lenght[i] - 12)
+        else:
+            t.read(36)
+        t.write(struct.pack('<f', mesh_vertex_x[i][j]))
+        t.write(struct.pack('<f', mesh_vertex_y[i][j]))
+        t.write(struct.pack('<f', mesh_vertex_z[i][j]))
+        print(f"Write Vertex, Object {i}, Index {j}, "
+              f"X {mesh_vertex_x[i][j]}, Y {mesh_vertex_y[i][j]}, Z {mesh_vertex_z[i][j]}, "
+              f"Offset {t.tell() - 12}")
+
+def write_mesh_uv(t, i):
+    t.seek(new_mesh_data_offset[i])
+    print(f"Seek to offset {t.tell()} for Object {i}")
+
+    for j in range(mesh_data_count[i]):
+        flag_start_offset = t.tell()
+
+        # kalau ada flag, lompat sesuai decode
+        if mesh_flag_boolean[i]:
+            t.seek(t.tell() + ((mesh_flag_decode[i] + 1) * 4))
+        # kalau tidak ada flag, langsung di posisi sekarang
+
+        # tulis ulang U,V
+        t.write(struct.pack('<f', mesh_uv_x[i][j]))
+        t.write(struct.pack('<f', mesh_uv_y[i][j]))
+
+        print(f"Write UV, Object {i}, Index {j}, "
+              f"U {mesh_uv_x[i][j]}, V {mesh_uv_y[i][j]}, "
+              f"Offset {t.tell() - 8}")
+
+        # skip sisa blok, jangan diubah
+        if mesh_flag_boolean[i]:
+            t.read(mesh_data_lenght[i] - (t.tell() - flag_start_offset))
+        else:
+            t.read(36 - 8)
+
 def write_material_mesh(t,i):
     t.seek(0,os.SEEK_END)
     new_mesh_material_offset.append(t.tell())
@@ -314,7 +427,7 @@ def write_material_mesh(t,i):
     t.write(struct.pack('<I',new_mesh_material_offset[i]-8))
     print(f"Write New Mesh Material, Object {i}, Offset {new_mesh_material_offset[i]}, Lenght {len(mesh_material[i])}")
     pass
-def write_faces_mesh(t,i):
+def write_mesh_faces(t,i):
     new_mesh_faces_start_offset.append([])
     new_mesh_faces_header_offset.append([])
     for j in range(mesh_material_count[i]):
@@ -329,9 +442,12 @@ def write_faces_mesh(t,i):
         new_mesh_faces_start_offset[i].append(t.tell())
         for k in range(mesh_faces_count[i][j]):
             new_mesh_face_offset[i][j].append(t.tell())
-            t.write(mesh_face[i][j][k])
+            # tulis tiap elemen face (2 byte)
+            for l in mesh_face[i][j][k]:
+                t.write(struct.pack('<H', l))
             padding(t)
             pass
+        pass
         t.seek(new_mesh_faces_header_offset[i][j])
         for k in range(mesh_faces_count[i][j]):
             t.read(12)
@@ -435,7 +551,7 @@ def generate_pof0(t):
 def print_mesh():
     print(f"Mesh List: ")
     for i in range(mesh_count):
-        print(f"Object {i}, Vertice {mesh_vertice_count[i]}, Material {mesh_material_count[i]}")
+        print(f"Object {i}, Data {mesh_data_count[i]}, Material {mesh_material_count[i]}")
         pass
     pass
 def duplicate_mesh(b,i):
@@ -450,11 +566,11 @@ def duplicate_mesh(b,i):
     mesh_bones_header_offset.append(mesh_bones_header_offset[i])
     mesh_bones_header.append(mesh_bones_header[i])
 
-    #mesh_vertice
-    mesh_vertice_header_offset.append(mesh_vertice_header_offset[i])
-    mesh_vertice_count.append(mesh_vertice_count[i])
-    mesh_vertice_offset.append(mesh_vertice_offset[i])
-    mesh_vertice.append(mesh_vertice[i])
+    #mesh_data
+    mesh_data_header_offset.append(mesh_data_header_offset[i])
+    mesh_data_count.append(mesh_data_count[i])
+    mesh_data_offset.append(mesh_data_offset[i])
+    mesh_data.append(mesh_data[i])
 
     #mesh_material
     mesh_material_count.append(mesh_material_count[i])
@@ -463,13 +579,11 @@ def duplicate_mesh(b,i):
 
     read_faces_mesh(b,mesh_count-1)
     pass
-def remove_mesh(t,i):
+def remove_mesh(i):
     global mesh_count
 
     # mesh count+1
     mesh_count=mesh_count-1
-    t.seek(24)
-    t.write(struct.pack('<I',mesh_count))
 
     #mesh_header
     del mesh_header[i]
@@ -478,11 +592,11 @@ def remove_mesh(t,i):
     del mesh_bones_header_offset[i]
     del mesh_bones_header[i]
 
-    #mesh_vertice
-    del mesh_vertice_header_offset[i]
-    del mesh_vertice_count[i]
-    del mesh_vertice_offset[i]
-    del mesh_vertice[i]
+    #mesh_data
+    del mesh_data_header_offset[i]
+    del mesh_data_count[i]
+    del mesh_data_offset[i]
+    del mesh_data[i]
 
     #mesh_material
     del mesh_material_count[i]
@@ -520,16 +634,18 @@ def main():
     read_mesh_header(base_file)
     read_bones_mesh_offset_header(base_file)
     read_bones_mesh_header(base_file)
-    read_vertice_mesh_header(base_file)
-    read_vertice_flag_header(base_file)
-    read_vertice_mesh(base_file)
+    read_mesh_data_header(base_file)
+    read_data_flag_header(base_file)
+    read_mesh_data(base_file)
     read_material_header_mesh(base_file)
     read_material_mesh(base_file)
     for i in range(mesh_count):
-        read_faces_mesh(base_file,i)
+        read_mesh_vertex(base_file,i)
+        read_mesh_uv(base_file,i)
+        read_mesh_faces(base_file,i)
         pass
     print_mesh()
-
+    
     #menjalankan perintah spesifik
     a=int(input("Answer: "))
     try:
@@ -545,16 +661,18 @@ def main():
         print(f"Cannot open {sys.argv[2]}")
         return 1
     #contoh perintah spesifik
-    duplicate_mesh(base_file,a)
+    #duplicate_mesh(base_file,a)
 
     #menulis perubahan ke target_file
     write_header(target_file)
     write_mesh_header(target_file)
     for i in range(mesh_count):
         write_bones_mesh_header(target_file,i)
-        write_vertice_mesh(target_file,i)
+        write_mesh_data(target_file,i)
         write_material_mesh(target_file,i)
-        write_faces_mesh(target_file,i)
+        write_mesh_faces(target_file,i)
+        write_mesh_vertex(target_file,i)
+        write_mesh_uv(target_file,i)
     write_bones(target_file)
     write_texture(target_file)
     write_model_name(target_file)
