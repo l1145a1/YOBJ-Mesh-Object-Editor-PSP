@@ -159,6 +159,7 @@ def read_mesh_header_bones(b,i):
         mesh_bones[i].append(struct.unpack('<I', b.read(4))[0])
         print(f"Mesh Bones, Index {j}, Value {mesh_bones[i][j]}")
     pass
+#read_procedure
 def read_mesh_data_header(b,i):
     b.seek(mesh_data_header_offset[i]+8)
     print(f"Read Mesh Data Offset, Object {i}, Offset {b.tell()}")
@@ -308,7 +309,7 @@ def read_model_name(b):
     print(f"Read Model Name at offset {b.tell()}")
     model_name=b.read(16).decode("ascii").rstrip("\x00")
     pass
-
+#write_procedure
 def write_header(t):
     t.seek(0,os.SEEK_END)
     print(f"Write Header at offset {t.tell()}")
@@ -533,7 +534,7 @@ def write_model_name(t):
     all_offset.append(t.tell())
     t.write(struct.pack('<I',new_model_name_offset-8))
     pass
-
+#pof0_generator
 def out(t, cursor, diff):   #pofo encrpyt logic
     count = 0
     sp = cursor - diff
@@ -577,108 +578,79 @@ def generate_pof0(t):
     t.seek(new_pof0_lenght_offset)
     t.write(struct.pack('<I',new_pof0_lenght))
     pass
+#mesh_editor
 def print_mesh():
     print(f"Mesh List: ")
     for i in range(mesh_count):
-        print(f"Object {i}, Data {mesh_data_count[i]}, Material {mesh_material_count[i]}")
+        print(f"Object {i}, Mesh Data {mesh_data_count[i]}, Material {mesh_material_count[i]}")
         pass
     pass
 def duplicate_mesh(b, i):
     global mesh_count
     mesh_count += 1
-
-    # mesh_header
+    
+    # duplicate mesh_header
+    mesh_header_offset.append(copy.deepcopy(mesh_header_offset[i]))
     mesh_header.append(copy.deepcopy(mesh_header[i]))
+    mesh_material_count.append(copy.deepcopy(mesh_material_count[i]))
+    mesh_bones_header_offset.append(copy.deepcopy(mesh_bones_header_offset[i]))
+    mesh_material_header_offset.append(copy.deepcopy(mesh_material_header_offset[i]))
+    mesh_data_header_offset.append(copy.deepcopy(mesh_data_header_offset[i]))
+    mesh_flag.append(copy.deepcopy(mesh_flag[i]))
+    mesh_data_count.append(copy.deepcopy(mesh_data_count[i]))
 
-    # mesh_bones_header
-    mesh_bones_header_offset.append(mesh_bones_header_offset[i])
-    mesh_bones_header.append(copy.deepcopy(mesh_bones_header[i]))
-
-    # mesh_data
-    mesh_data_header_offset.append(mesh_data_header_offset[i])
-    mesh_data_start_offset.append(mesh_data_start_offset[i])
-    mesh_data_count.append(mesh_data_count[i])
-    mesh_data_lenght.append(mesh_data_lenght[i])
-    mesh_data.append(copy.deepcopy(mesh_data[i]))
-
-    # mesh_flag
-    mesh_flag.append(mesh_flag[i])
-    mesh_flag_binary.append(mesh_flag_binary[i])
-    mesh_flag_boolean.append(mesh_flag_boolean[i])
-    mesh_flag_decode.append(mesh_flag_decode[i])
-
-    # mesh_vertex
-    mesh_vertex_offset.append(mesh_vertex_offset[i])
-    mesh_vertex_x.append(copy.deepcopy(mesh_vertex_x[i]))
-    mesh_vertex_y.append(copy.deepcopy(mesh_vertex_y[i]))
-    mesh_vertex_z.append(copy.deepcopy(mesh_vertex_z[i]))
-
-    # mesh_uv
-    mesh_uv_offset.append(mesh_uv_offset[i])
-    mesh_uv_u.append(copy.deepcopy(mesh_uv_u[i]))
-    mesh_uv_v.append(copy.deepcopy(mesh_uv_v[i]))
-
-    # mesh_material
-    mesh_material_count.append(mesh_material_count[i])
-    mesh_material_header_offset.append(mesh_material_header_offset[i])
-    mesh_material_texture.append(copy.deepcopy(mesh_material_texture[i]))
-    mesh_material.append(copy.deepcopy(mesh_material[i]))
-
-    # mesh_faces
+    #re-read
+    read_mesh_header_bones(b,mesh_count-1)
+    read_mesh_data_header(b,mesh_count-1)
+    read_flag(mesh_count-1)
+    read_mesh_data(b,mesh_count-1)
+    read_mesh_material(b,mesh_count-1)
+    read_mesh_faces_header(b,mesh_count-1)
     read_mesh_faces(b,mesh_count-1)
+    print(f"Mesh {i}, Duplicated.")
 def remove_mesh(i):
     global mesh_count
 
     # mesh count+1
     mesh_count=mesh_count-1
 
-    #mesh_header
+    #mesh
+    del mesh_header_offset[i]
     del mesh_header[i]
-
-    #mesh_bones_header
     del mesh_bones_header_offset[i]
-    del mesh_bones_header[i]
-
-    #mesh_data
+    del mesh_bones_count[i]
+    del mesh_bones[i]
     del mesh_data_header_offset[i]
-    del mesh_data_count[i]
     del mesh_data_start_offset[i]
+    del mesh_data_offset[i]
     del mesh_data_lenght[i]
+    del mesh_data_count[i]
     del mesh_data[i]
-
-    #mesh_vertex
+    del mesh_flag[i]
+    del mesh_flag_boolean[i]
+    del mesh_flag_binary[i]
+    del mesh_flag_decode[i]
     del mesh_vertex_offset[i]
     del mesh_vertex_x[i]
     del mesh_vertex_y[i]
     del mesh_vertex_z[i]
-
-    #mesh_uv
     del mesh_uv_offset[i]
     del mesh_uv_u[i]
     del mesh_uv_v[i]
-
-    #mesh_flag
-    del mesh_flag[i]
-    del mesh_flag_binary[i]
-    del mesh_flag_boolean[i]
-    del mesh_flag_decode[i]
-
-    #mesh_material
-    del mesh_material_count[i]
     del mesh_material_header_offset[i]
-    del mesh_material_texture[i]
+    del mesh_material_offset[i]
+    del mesh_material_count[i]
     del mesh_material[i]
-
-    #mesh_faces
+    del mesh_material_texture[i]
     del mesh_material_faces_count[i]
     del mesh_material_faces_header_offset[i]
-    del mesh_faces_header[i]
     del mesh_material_faces_start_offset[i]
-
-    #mesh_face
+    del mesh_faces_header[i]
+    del mesh_faces_header_offset[i]
     del mesh_face_count[i]
     del mesh_face_offset[i]
     del mesh_face[i]
+    print(f"Mesh {i}, Removed.")
     pass
 def export_obj(i):
     lines = []
@@ -752,80 +724,6 @@ def export_mtl(i):
     mtl_text = "\n".join(lines)
     print(mtl_text)
     return mtl_text
-def import_custom_mesh(b, i):
-    global mesh_count
-
-    # browse file OBJ
-    root = tk.Tk()
-    root.withdraw()
-    obj_path = filedialog.askopenfilename(
-        title="Pilih file OBJ",
-        filetypes=[("Wavefront OBJ", "*.obj")]
-    )
-    if not obj_path:
-        print("Tidak ada file dipilih.")
-        return
-
-    vertices = []
-    uvs = []
-    faces = []
-    materials = []
-
-    current_mtl = "default"
-    with open(obj_path, "r") as f:
-        for line in f:
-            if line.startswith("v "):
-                parts = line.strip().split()
-                vertices.append((float(parts[1]), float(parts[2]), float(parts[3])))
-            elif line.startswith("vt "):
-                parts = line.strip().split()
-                uvs.append((float(parts[1]), float(parts[2])))
-            elif line.startswith("usemtl "):
-                current_mtl = line.strip().split()[1]
-                if current_mtl not in materials:
-                    materials.append(current_mtl)
-            elif line.startswith("f "):
-                parts = line.strip().split()[1:]
-                face = []
-                for p in parts:
-                    vals = p.split('/')
-                    v_idx = int(vals[0]) - 1
-                    vt_idx = int(vals[1]) - 1 if len(vals) > 1 and vals[1] else v_idx
-                    face.append((v_idx, vt_idx))
-                faces.append(face)
-
-    # tahap normalisasi
-    vertices = normalize_vertex(vertices)
-    uv_map   = normalize_uv(vertices, uvs, faces)
-    strips   = normalize_face(faces)
-
-    # di sini nanti kamu pandu cara masukin vertices, uv_map, strips ke mesh_xxx
-    print(f"OBJ parsed: {len(vertices)} vertices, {len(uv_map)} UVs, {len(strips)} strips")
-    print(f"Custom mesh berhasil diimport dari {obj_path}")
-def normalize_vertex(vertices):
-    # vertices: list of (x,y,z) dari OBJ
-    # langsung return, karena jumlah v sudah sesuai
-    return vertices
-def normalize_uv(vertices, uvs, faces):
-    # hasil: uv_map panjangnya sama dengan vertices
-    uv_map = [(0.0, 0.0)] * len(vertices)
-
-    for face in faces:
-        for v_idx, vt_idx in face:  # face sudah di-parse jadi tuple (v, vt)
-            if vt_idx < len(uvs):
-                uv_map[v_idx] = uvs[vt_idx]
-            else:
-                uv_map[v_idx] = (0.0, 0.0)  # fallback kalau vt tidak ada
-    return uv_map
-def normalize_face(faces):
-    # faces: list of [(v_idx, vt_idx), ...] dari OBJ
-    strip = []
-    for face in faces:
-        # ambil index vertex saja
-        for v_idx, vt_idx in face:
-            strip.append(v_idx)
-    # hasil: satu strip panjang
-    return [strip]  # dibungkus list karena YOBJ pakai [material][strip]
 
 def main():
     if len(sys.argv) != 3:
@@ -855,18 +753,20 @@ def main():
     read_bones(base_file)
     read_texture(base_file)
     read_model_name(base_file)
+    print_mesh()
+    a=int(input("Answer: "))
     try:
         target_file = open(sys.argv[2], "wb")
     except IOError:
         print(f"Cannot open {sys.argv[2]}")
         return 1
-
     make_new_file(target_file)
     try:
         target_file = open(sys.argv[2], "r+b")
     except IOError:
         print(f"Cannot open {sys.argv[2]}")
         return 1
+    duplicate_mesh(base_file, a)
     write_header(target_file)
     write_mesh_header(target_file)
     for i in range(mesh_count):
