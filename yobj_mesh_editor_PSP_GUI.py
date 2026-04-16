@@ -2194,7 +2194,7 @@ def import_from_dae_mesh(filepath):
             coord_x = vx
             coord_y = vz
             coord_z = -vy
-            orig_x, orig_y, orig_z = rotate_3d_x(coord_x, coord_y, coord_z, 180)
+            orig_x, orig_y, orig_z = rotate_3d_x(coord_x, coord_y, coord_z, 90)
             mesh_vertex_x[i].append(orig_x)
             mesh_vertex_y[i].append(orig_y)
             mesh_vertex_z[i].append(orig_z)
@@ -2483,6 +2483,7 @@ def import_from_dae_weight(filepath, verbose=False):
             print(f"Mesh {i}: imported slots={desired_slots}, vertices={internal_vertices}")
 
     return True
+
 
 #GUI
 def reset_variables():
@@ -3078,10 +3079,22 @@ def export_dae_GUI():
         # ekspor ke lokasi yang dipilih user
         export_dae(a, filepath)
         messagebox.showinfo("Sukses", f"Object {a} Exported to DAE.")
+import os
+from tkinter import filedialog, messagebox
+
 def export_as_one_dae_GUI():
+    # ambil nama file input
+    base_path = base_file.name
+    base_dir = os.path.dirname(base_path)
+    base_name, _ = os.path.splitext(os.path.basename(base_path))
+
+    # default nama output .dae
+    default_name = base_name + ".dae"
+
     filepath = filedialog.asksaveasfilename(
         defaultextension=".dae",
-        initialfile="AllObjects.dae",
+        initialfile=default_name,   # ganti dari "AllObjects.dae"
+        initialdir=base_dir,        # default folder sama dengan input
         filetypes=[("Collada files", "*.dae"), ("All files", "*.*")]
     )
     if filepath:
