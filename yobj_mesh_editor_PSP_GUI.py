@@ -2256,8 +2256,8 @@ def import_from_dae_mesh(filepath):
             tex_name_found = find_texture_name_for_material(root, mat_name, ns)
 
             if tex_name_found:
-                # ambil basename, hapus ekstensi, hapus whitespace/null
                 base = os.path.basename(tex_name_found)
+                # hapus ekstensi terakhir saja (berdasarkan titik terakhir)
                 name_no_ext = os.path.splitext(base)[0]
             else:
                 name_no_ext = mat_name
@@ -2266,9 +2266,13 @@ def import_from_dae_mesh(filepath):
             tex_name = name_no_ext.encode("ascii", errors="ignore").decode("ascii")
             tex_name = tex_name.replace("\x00", "").strip()[:16]
 
-            # jika masih ada titik di akhir atau ekstensi tersisa, pastikan dihapus
-            if "." in tex_name:
-                tex_name = tex_name.split(".")[0][:16]
+            # pastikan tidak ada ekstensi tersisa (seharusnya tidak perlu, tapi aman)
+            if "." in tex_name and tex_name.lower().endswith(tuple(["tga","png","jpg","jpeg","bmp","dds"])):
+                tex_name = tex_name.rsplit(".", 1)[0][:16]
+
+
+            # potong ke 16 karakter maksimal
+            tex_name = tex_name[:16]
 
             texture.append(tex_name)
 
