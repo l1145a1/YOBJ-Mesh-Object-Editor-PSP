@@ -699,21 +699,27 @@ def rotate_3d_x(x, y, z, degree):
     new_x = x
     return (new_x, new_y, new_z)
 def export_obj(i, filepath, mtlpath):
+    import os, math
+
     with open(filepath, "w", encoding="utf-8") as obj_file:
         obj_file.write(f"# Exported Object {i}\n")
-        # referensi ke file MTL sesuai path
         obj_file.write(f"mtllib {os.path.basename(mtlpath)}\n")
 
         # vertex dengan rotasi 180 derajat di sumbu X
         for j in range(mesh_data_count[i]):
             x, y, z = mesh_vertex_x[i][j], mesh_vertex_y[i][j], mesh_vertex_z[i][j]
             coord_x, coord_y, coord_z = rotate_3d_x(x, y, z, 180)
-            obj_file.write(
-                f"v {round(coord_x, 6)} {round(-coord_z, 6)} {round(coord_y, 6)}\n"
-            )
+            obj_file.write(f"v {round(coord_x,6)} {round(-coord_z,6)} {round(coord_y,6)}\n")
+
         # uv
         for j in range(mesh_data_count[i]):
             obj_file.write(f"vt {mesh_uv_u[i][j]} {mesh_uv_v[i][j]}\n")
+
+        # normals (tanpa rotasi, atau bisa rotasi juga kalau mau konsisten)
+        for j in range(mesh_data_count[i]):
+            nx, ny, nz = mesh_normal_x[i][j], mesh_normal_y[i][j], mesh_normal_z[i][j]
+            obj_file.write(f"vn {round(nx,6)} {round(ny,6)} {round(nz,6)}\n")
+
         # faces dengan pola ganjil-genap + usemtl
         for j in range(mesh_material_count[i]):
             tex_id = mesh_material_texture[i][j]
@@ -726,22 +732,18 @@ def export_obj(i, filepath, mtlpath):
                     continue
                 # baris pertama
                 obj_file.write(
-                    f"f {face_indices[0]+1}/{face_indices[0]+1} "
-                    f"{face_indices[1]+1}/{face_indices[1]+1} "
-                    f"{face_indices[2]+1}/{face_indices[2]+1}\n"
+                    f"f {face_indices[0]+1}/{face_indices[0]+1}/{face_indices[0]+1} "
+                    f"{face_indices[1]+1}/{face_indices[1]+1}/{face_indices[1]+1} "
+                    f"{face_indices[2]+1}/{face_indices[2]+1}/{face_indices[2]+1}\n"
                 )
                 # baris berikutnya zig-zag
-                for n in range(1, len(face_indices) - 2):
-                    if n % 2 == 1:  # ganjil
-                        v1 = face_indices[n]
-                        v2 = face_indices[n+2]
-                        v3 = face_indices[n+1]
-                    else:           # genap
-                        v1 = face_indices[n]
-                        v2 = face_indices[n+1]
-                        v3 = face_indices[n+2]
+                for n in range(1, len(face_indices)-2):
+                    if n % 2 == 1:
+                        v1, v2, v3 = face_indices[n], face_indices[n+2], face_indices[n+1]
+                    else:
+                        v1, v2, v3 = face_indices[n], face_indices[n+1], face_indices[n+2]
                     obj_file.write(
-                        f"f {v1+1}/{v1+1} {v2+1}/{v2+1} {v3+1}/{v3+1}\n"
+                        f"f {v1+1}/{v1+1}/{v1+1} {v2+1}/{v2+1}/{v2+1} {v3+1}/{v3+1}/{v3+1}\n"
                     )
 def export_mtl(i, mtlpath):
     with open(mtlpath, "w", encoding="utf-8") as mtl_file:
@@ -763,57 +765,49 @@ def export_mtl(i, mtlpath):
             mtl_file.write("illum 2\n")
             mtl_file.write(f"map_Kd {tex_name}.png\n")
 def import_obj(i, filepath):
+    from collections import Counter
+
     vertices = []
-    uvs = []
-    # simpan semua UV yang muncul per vertex
-    vertex_uvs = [[] for _ in range(mesh_data_count[i])]
+    normals = []
+    vertex_normals = [[] for _ in range(mesh_data_count[i])]
 
     with open(filepath, "r", encoding="utf-8") as obj_file:
         for line in obj_file:
-            if line.startswith("v "):  # vertex
-                parts = line.strip().split()
-                vx, vy, vz = map(float, parts[1:4])
-                # balik transformasi sesuai ekspor
-                coord_x = vx
-                coord_y = vz
-                coord_z = -vy
+            if line.startswith("v "):
+                vx, vy, vz = map(float, line.strip().split()[1:4])
+                coord_x, coord_y, coord_z = vx, vz, -vy
                 orig_x, orig_y, orig_z = rotate_3d_x(coord_x, coord_y, coord_z, 180)
                 vertices.append((orig_x, orig_y, orig_z))
 
-            elif line.startswith("vt "):  # uv
-                parts = line.strip().split()
-                u, v = map(float, parts[1:3])
-                uvs.append((u, v))
+            elif line.startswith("vn "):
+                nx, ny, nz = map(float, line.strip().split()[1:4])
+                normals.append((nx, ny, nz))
 
-            elif line.startswith("f "):  # face
+            elif line.startswith("f "):
                 parts = line.strip().split()[1:]
                 for p in parts:
                     vals = p.split("/")
-                    if len(vals) >= 2:
+                    if len(vals) >= 3:  # v/vt/vn
                         v_idx = int(vals[0]) - 1
-                        vt_idx = int(vals[1]) - 1
-                        if 0 <= v_idx < mesh_data_count[i] and 0 <= vt_idx < len(uvs):
-                            # simpan semua UV yang dipakai vertex ini
-                            vertex_uvs[v_idx].append(uvs[vt_idx])
+                        vn_idx = int(vals[2]) - 1
+                        if 0 <= v_idx < mesh_data_count[i] and 0 <= vn_idx < len(normals):
+                            vertex_normals[v_idx].append(normals[vn_idx])
 
-    # verifikasi jumlah vertex sama dengan mesh_data_count[i]
+    # verifikasi jumlah vertex
     if len(vertices) != mesh_data_count[i]:
         return False
 
-    # masukkan kembali ke struktur mesh
+    # assign vertex
     for j, (x, y, z) in enumerate(vertices):
         mesh_vertex_x[i][j] = x
         mesh_vertex_y[i][j] = y
         mesh_vertex_z[i][j] = z
 
-    # isi UV: pilih UV yang paling sering muncul (dominant)
+    # assign normals: pilih yang paling sering muncul
     for j in range(mesh_data_count[i]):
-        if vertex_uvs[j]:
-            counts = Counter(vertex_uvs[j])
-            u, v = counts.most_common(1)[0][0]
-            mesh_uv_u[i][j], mesh_uv_v[i][j] = u, v
-        else:
-            mesh_uv_u[i][j], mesh_uv_v[i][j] = 0.0, 0.0
+        if vertex_normals[j]:
+            nx, ny, nz = Counter(vertex_normals[j]).most_common(1)[0][0]
+            mesh_normal_x[i][j], mesh_normal_y[i][j], mesh_normal_z[i][j] = nx, ny, nz
 
     return True
 def parse_obj(filepath):
@@ -1767,7 +1761,19 @@ def export_dae(i, filename):
         "xmlns": "http://www.collada.org/2005/11/COLLADASchema",
         "version": "1.4.1"
     })
-
+    def make_matrix(px, py, pz, rx, ry, rz):
+        cx, cy, cz = math.cos(rx), math.cos(ry), math.cos(rz)
+        sx, sy, sz = math.sin(rx), math.sin(ry), math.sin(rz)
+        m00 = cy*cz
+        m01 = -cy*sz
+        m02 = sy
+        m10 = sx*sy*cz+cx*sz
+        m11 = -sx*sy*sz+cx*cz
+        m12 = -sx*cy
+        m20 = -cx*sy*cz+sx*sz
+        m21 = cx*sy*sz+sx*cz
+        m22 = cx*cy
+        return f"{m00} {m01} {m02} {px}  {m10} {m11} {m12} {py}  {m20} {m21} {m22} {pz}  0 0 0 1"
     # --- Geometry untuk mesh i ---
     lib_geom = ET.SubElement(collada, "library_geometries")
     geom = ET.SubElement(lib_geom, "geometry", id=f"Mesh{i}", name=f"Mesh{i}")
@@ -3243,7 +3249,8 @@ row2_frame = tk.Frame(root)
 row2_frame.grid(row=3, column=0, columnspan=3, pady=5)
 tk.Button(row2_frame, text="Export Object Data", command=export_object_dat).pack(side=tk.LEFT, padx=5)
 tk.Button(row2_frame, text="Import Object Data", command=import_object_dat).pack(side=tk.LEFT, padx=5)
-tk.Button(row2_frame, text="Import Custom .OBJ", command=import_custom_object).pack(side=tk.LEFT, padx=5)
+tk.Button(row2_frame, text="Import .OBJ", command=import_object).pack(side=tk.LEFT, padx=5)
+tk.Button(row2_frame, text="Import All .OBJ", command=import_all_object).pack(side=tk.LEFT, padx=5)
 # Baris 3: Export Selected, Import Selected
 row3_frame = tk.Frame(root)
 row3_frame.grid(row=4, column=0, columnspan=3, pady=5)
@@ -3251,4 +3258,3 @@ tk.Button(row3_frame, text="Export All As One .DAE", command=export_as_one_dae_G
 tk.Button(row3_frame, text="Import All from .DAE (Add Mesh)", command=import_from_dae_mesh_GUI).pack(side=tk.LEFT, padx=5)
 tk.Button(row3_frame, text="Import All from .DAE (Weight)", command=import_from_dae_weight_GUI).pack(side=tk.LEFT, padx=5)
 root.mainloop()
-
