@@ -344,6 +344,39 @@ def read_model_name(b):
     model_name=b.read(16).decode("ascii").rstrip("\x00")
     pass
 #write_procedure
+def cleanup_duplicate_textures():
+    global texture, texture_count, mesh_material_texture
+
+    new_texture = []
+    remap = {}
+
+    # buat daftar texture unik + tabel remap
+    for old_idx, tex_name in enumerate(texture):
+
+        if tex_name in new_texture:
+            new_idx = new_texture.index(tex_name)
+        else:
+            new_idx = len(new_texture)
+            new_texture.append(tex_name)
+
+        remap[old_idx] = new_idx
+
+    # perbaiki semua referensi material
+    for mesh_id in range(len(mesh_material_texture)):
+        for mat_id in range(len(mesh_material_texture[mesh_id])):
+
+            old_tex = mesh_material_texture[mesh_id][mat_id]
+
+            if old_tex in remap:
+                mesh_material_texture[mesh_id][mat_id] = remap[old_tex]
+
+    removed = len(texture) - len(new_texture)
+
+    texture[:] = new_texture
+    texture_count = len(texture)
+
+    print("Removed", removed, "duplicate textures")
+    print("New texture count:", texture_count)
 def write_header(t):
     t.seek(0,os.SEEK_END)
     print(f"Write Header at offset {t.tell()}")
@@ -2281,8 +2314,6 @@ def import_from_dae_mesh(filepath):
             tex_name = tex_name[:16]
 
             texture.append(tex_name)
-
-
     return True
 def import_from_dae_weight(filepath, verbose=False):
     """
@@ -2494,7 +2525,6 @@ def import_from_dae_weight(filepath, verbose=False):
 
     return True
 
-
 #GUI
 def reset_variables():
     global header, all_offset, mesh_count, bone_count, texture_count
@@ -2649,6 +2679,7 @@ def read_file(b):
         messagebox.showerror("Error", f"Gagal membaca file: {e}")
 def write_file(t):
     try:
+        cleanup_duplicate_textures()
         write_header(t)
         write_mesh_header(t)
         for i in range(mesh_count):
