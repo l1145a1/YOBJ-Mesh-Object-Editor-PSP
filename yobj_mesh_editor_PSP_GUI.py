@@ -1729,29 +1729,29 @@ def export_as_one_dae(filename):
         v_el = ET.SubElement(vw_el, "v")
         v_el.text = " ".join(str(x) for x in vw_pairs)
 
-    # --- Visual Scene: write bones that are used plus parent chain ---
+    # --- Visual Scene : export SELURUH skeleton ---
     lib_scene = ET.SubElement(collada, "library_visual_scenes")
     scene = ET.SubElement(lib_scene, "visual_scene", id="Scene", name="Scene")
-    armature_node = ET.SubElement(scene, "node", id="Armature", name="Armature", type="NODE")
+    armature_node = ET.SubElement(scene, "node",
+                                id="Armature",
+                                name="Armature",
+                                type="NODE")
 
-    # collect export bones from all slot_bones across meshes
-    export_bones = set()
-    for i in range(mesh_count):
-        mb = mesh_bones[i] if i < len(mesh_bones) else []
-        for b in mb[:mesh_bones_count[i]]:
-            if isinstance(b, int) and 0 <= b < bone_count:
-                export_bones.add(b)
-    # add parent chain
-    for b in list(export_bones):
-        p = bone_parrent[b]
-        while p >= 0 and p < bone_count and p not in export_bones:
-            export_bones.add(p)
-            p = bone_parrent[p]
+    # export semua bone, bukan hanya yang dipakai mesh
+    export_bones = list(range(bone_count))
 
-    # create nodes for bones
+    # buat node untuk semua bone
     bone_nodes = {}
-    for b in sorted(export_bones):
-        node = ET.Element("node", id=bone_name[b], name=bone_name[b], sid=bone_name[b], type="JOINT")
+
+    for b in export_bones:
+        node = ET.Element(
+            "node",
+            id=bone_name[b],
+            name=bone_name[b],
+            sid=bone_name[b],
+            type="JOINT"
+        )
+
         mat = ET.SubElement(node, "matrix")
         mat.text = make_matrix(
             bone_local_position_x[b],
@@ -1761,19 +1761,27 @@ def export_as_one_dae(filename):
             bone_rotation_y[b],
             bone_rotation_z[b]
         )
+
         bone_nodes[b] = node
 
-    # assemble hierarchy
-    for b in sorted(export_bones):
+    # susun hierarchy sesuai parent asli
+    for b in export_bones:
         parent = bone_parrent[b]
-        if parent in bone_nodes:
+
+        if (
+            parent >= 0
+            and parent < bone_count
+            and parent in bone_nodes
+        ):
             bone_nodes[parent].append(bone_nodes[b])
         else:
             armature_node.append(bone_nodes[b])
 
-    # add mesh nodes instance_controller
-    global_roots = [idx for idx in export_bones if bone_parrent[idx] < 0]
-    root_idx = global_roots[0] if global_roots else next((idx for idx,p in enumerate(bone_parrent) if p < 0), 0)
+    # cari root pertama untuk skeleton controller
+    root_idx = next(
+        (i for i, p in enumerate(bone_parrent) if p < 0),
+        0
+    )
     for i in range(mesh_count):
         mesh_node = ET.SubElement(armature_node, "node", id=f"Object{i}", name=f"Object{i}")
         inst_ctrl = ET.SubElement(mesh_node, "instance_controller", url=f"#Mesh{i}-skin")
