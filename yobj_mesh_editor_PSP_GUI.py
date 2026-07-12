@@ -785,10 +785,15 @@ def export_mtl(i, mtlpath):
         for j in range(mesh_material_count[i]):
             tex_id = mesh_material_texture[i][j]
             tex_name_raw = texture[tex_id]
+
             if isinstance(tex_name_raw, bytes):
-                tex_name = tex_name_raw.decode("utf-8").strip("\x00")
+                tex_name = tex_name_raw.decode("utf-8", errors="ignore")
             else:
-                tex_name = str(tex_name_raw).strip("\x00")
+                tex_name = str(tex_name_raw)
+
+            # bersihkan karakter null, whitespace, dan kontrol
+            tex_name = tex_name.strip().strip("\x00")
+            tex_name = "".join(ch for ch in tex_name if ch.isprintable())
 
             mtl_file.write(f"newmtl {tex_name}\n")
             mtl_file.write("Ka 1.000 1.000 1.000\n")
