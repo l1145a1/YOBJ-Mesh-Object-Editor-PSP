@@ -2537,8 +2537,283 @@ def import_from_dae_weight(filepath, verbose=False):
             print(f"Mesh {i}: imported slots={desired_slots}, vertices={internal_vertices}")
 
     return True
+def import_from_dae(filepath, verbose=False):
+    """
+    Mengimpor Mesh DAE sekaligus memetakan data Bone Weight secara presisi 
+    ke dalam struktur global YOBJ secara sinkron.
+    """
+    global mesh_count, texture_count, bone_name
+    
+    tree = ET.parse(filepath)
+    root = tree.getroot()
+    ns = {"c": "http://www.collada.org/2005/11/COLLADASchema"}
 
-#GUI
+    # Ambil semua controller (skinning data) dari DAE
+    controllers = root.findall(".//c:controller", ns)
+
+    for geom_idx, geom in enumerate(root.findall(".//c:geometry", ns)):
+        mesh_count += 1
+        i = mesh_count - 1
+
+        # 1. Parse geometry asli dari DAE
+        vertices, uvs, faces_raw, materials = parse_dae_geometry(geom, ns)
+
+        # 2. Normalisasi & Gabungkan duplikasi
+        vertices_norm, uvs_norm, faces_norm, index_map = normalize_dae(vertices, uvs, faces_raw, materials)
+        
+        # Tampung hasil merge dengan aman
+        try:
+            m_verts, m_uvs, m_faces, m_idx_map = merge_duplicate_vertices(
+                vertices_norm, uvs_norm, faces_norm, index_map
+            )
+            # Validasi jika hasil merge tidak kosong
+            if len(m_verts) > 0:
+                vertices_norm = m_verts
+                uvs_norm = m_uvs
+                faces_norm = m_faces
+                index_map = m_idx_map
+        except Exception as e:
+            if verbose:
+                print(f"Gagal melakukan merge_duplicate_vertices, gunakan data normalisasi asli. Error: {e}")
+
+        # Proteksi jika data kosong
+        internal_vertices_count = len(vertices_norm)
+        if internal_vertices_count == 0:
+            if verbose:
+                print(f"Warning: Geometry {geom.get('id')} tidak menghasilkan vertex data. Skip.")
+            mesh_count -= 1
+            continue
+
+        # 3. Setup header & alokasi struktur YOBJ (Meniru template index 0)
+        mesh_header.append(copy.deepcopy(mesh_header[0]))
+        mesh_bones_header_offset.append(copy.deepcopy(mesh_bones_header_offset[0]))
+        
+        desired_slots = 8  # Slot standard WWE YOBJ
+        mesh_bones_count.append(desired_slots)
+        
+        mesh_data_header_offset.append(copy.deepcopy(mesh_data_header_offset[0]))
+        mesh_data_start_offset.append(copy.deepcopy(mesh_data_start_offset[0]))
+        mesh_flag.append(120831)
+        read_flag(i)
+        
+        # Menentukan panjang byte data per vertex
+        mesh_data_lenght.append((mesh_flag_decode[i] + 10) * 4 if mesh_flag_boolean[i] else 36)
+        mesh_material_header_offset.append(copy.deepcopy(mesh_material_header_offset[0]))
+        
+        # Alokasi list YOBJ agar siap di-append data
+        mesh_material.append([])
+        mesh_material_faces_header_offset.append([])
+        mesh_material_faces_start_offset.append([])
+        mesh_faces_header.append([])
+        mesh_face_count.append([])
+        mesh_face_offset.append([])
+        mesh_face.append([])
+        
+        # Masukkan total vertex yang valid ke list YOBJ global
+        mesh_data_count.append(internal_vertices_count)
+        mesh_data.append([])
+        mesh_uv_u.append([])
+        mesh_uv_v.append([])
+        mesh_vertex_color.append([])
+        mesh_normal_x.append([])
+        mesh_normal_y.append([])
+        mesh_normal_z.append([])
+        mesh_vertex_x.append([])
+        mesh_vertex_y.append([])
+        mesh_vertex_z.append([])
+
+        # 4. Isi data Transformasi Geometri (Vertex & UV)
+        for j, (vx, vy, vz) in enumerate(vertices_norm):
+            coord_x = vx
+            coord_y = vz
+            coord_z = -vy
+            orig_x, orig_y, orig_z = rotate_3d_x(coord_x, coord_y, coord_z, 90)
+            mesh_vertex_x[i].append(orig_x)
+            mesh_vertex_y[i].append(orig_y)
+            mesh_vertex_z[i].append(orig_z)
+
+            mesh_normal_x[i].append(0.0)
+            mesh_normal_y[i].append(1.0)
+            mesh_normal_z[i].append(0.0)
+
+            u, v = uvs_norm[j] if j < len(uvs_norm) else (0.0, 0.0)
+            mesh_uv_u[i].append(u)
+            mesh_uv_v[i].append(v)
+            mesh_vertex_color[i].append((255, 255, 255, 255))
+
+        for _ in range(internal_vertices_count):
+            mesh_data[i].append(b'\x00' * mesh_data_lenght[i])
+
+        # =================================================================
+        # 5. PARSE & RE-MAP BONE WEIGHTS SECARA SINKRON (FIXED)
+        # =================================================================
+        geom_id = geom.get("id") or ""
+        ctrl = None
+        for c in controllers:
+            skin_el = c.find("c:skin", ns)
+            if skin_el is not None and skin_el.get("source")[1:] == geom_id:
+                ctrl = c
+                break
+        if ctrl is None and geom_idx < len(controllers):
+            ctrl = controllers[geom_idx]
+
+        # YOBJ menggunakan struktur: 
+        # mesh_bones = List berisi 8 Bone ID global yang digunakan oleh mesh ini
+        # mesh_bones_weight = List berisi array 8 float weight untuk tiap vertex, 
+        #                     berkorespondensi dengan 8 indeks di mesh_bones.
+        current_mesh_bones = [0] * desired_slots
+        current_mesh_weights = [[0.0] * desired_slots for _ in range(internal_vertices_count)]
+
+        if ctrl is not None:
+            skin = ctrl.find("c:skin", ns)
+            if skin is not None:
+                name_array_el = skin.find(".//c:Name_array", ns)
+                slot_names = name_array_el.text.strip().split() if (name_array_el is not None and name_array_el.text) else []
+
+                # Daftarkan semua ID bone global yang memengaruhi mesh ini
+                global_bone_ids = []
+                for nm in slot_names:
+                    if nm.startswith("__pad_"):
+                        global_bone_ids.append(0)
+                    else:
+                        try:
+                            global_bone_ids.append(bone_name.index(nm))
+                        except (ValueError, NameError):
+                            global_bone_ids.append(0)
+
+                # Ambil daftar float weight murni dari source
+                weight_values = []
+                for src in skin.findall("c:source", ns):
+                    fa = src.find("c:float_array", ns)
+                    if fa is None or not fa.text:
+                        continue
+                    acc = src.find("c:technique_common/c:accessor", ns)
+                    if acc is not None:
+                        params = [p.get("name", "").upper() for p in acc.findall("c:param", ns)]
+                        if "WEIGHT" in params:
+                            weight_values = [float(x) for x in fa.text.strip().split()]
+                            break
+                if not weight_values:
+                    fa = skin.find(".//c:source/c:float_array", ns)
+                    if fa is not None and fa.text:
+                        weight_values = [float(x) for x in fa.text.strip().split()]
+
+                vw = skin.find("c:vertex_weights", ns)
+                if vw is not None:
+                    vcount_el = vw.find("c:vcount", ns)
+                    v_el = vw.find("c:v", ns)
+                    
+                    if vcount_el is not None and v_el is not None and vcount_el.text and v_el.text:
+                        vcount_list = [int(x) for x in vcount_el.text.strip().split()]
+                        v_list = [int(x) for x in v_el.text.strip().split()]
+
+                        dae_vertex_count = len(vcount_list)
+                        
+                        # Tampung sementara semua data bone & weight per vertex asli DAE
+                        # Format: dae_accumulated_weights[v_idx] = { global_bone_id: weight_value }
+                        dae_accumulated_weights = [{} for _ in range(dae_vertex_count)]
+
+                        cursor = 0
+                        for dae_v_idx, vc in enumerate(vcount_list):
+                            for _ in range(vc):
+                                if cursor + 1 >= len(v_list):
+                                    break
+                                joint_local = v_list[cursor]
+                                weight_idx = v_list[cursor + 1]
+                                cursor += 2
+                                
+                                wval = weight_values[weight_idx] if 0 <= weight_idx < len(weight_values) else 0.0
+                                
+                                if 0 <= joint_local < len(global_bone_ids) and wval > 0.0:
+                                    g_bone = global_bone_ids[joint_local]
+                                    # Akumulasikan jika ada duplikasi bone di vertex yang sama
+                                    dae_accumulated_weights[dae_v_idx][g_bone] = dae_accumulated_weights[dae_v_idx].get(g_bone, 0.0) + wval
+
+                        # Koleksi unik bone yang benar-benar memiliki bobot/weight di mesh ini
+                        mesh_wide_bones = set()
+                        for v_dict in dae_accumulated_weights:
+                            for g_bone, wval in v_dict.items():
+                                if wval > 0.01: # Threshold bone yang aktif
+                                    mesh_wide_bones.add(g_bone)
+                        
+                        mesh_wide_bones = sorted(list(mesh_wide_bones))
+                        
+                        # Batasi total bone dalam satu mesh maksimal 8 sesuai alokasi slot YOBJ
+                        if len(mesh_wide_bones) > desired_slots:
+                            mesh_wide_bones = mesh_wide_bones[:desired_slots]
+                        else:
+                            mesh_wide_bones += [0] * (desired_slots - len(mesh_wide_bones))
+                        
+                        current_mesh_bones = mesh_wide_bones
+
+                        # Sinkronisasi urutan index DAE asli ke index YOBJ yang baru
+                        for (old_v_idx, old_vt_idx), new_index in index_map.items():
+                            if 0 <= old_v_idx < dae_vertex_count and 0 <= new_index < internal_vertices_count:
+                                v_dict = dae_accumulated_weights[old_v_idx]
+                                
+                                # Petakan bobot ke 8 slot bone yang sudah kita tentukan di current_mesh_bones
+                                for slot_pos, g_bone in enumerate(current_mesh_bones):
+                                    if g_bone in v_dict:
+                                        current_mesh_weights[new_index][slot_pos] = v_dict[g_bone]
+
+                        # Normalisasi akhir (total weight per-vertex wajib = 1.0)
+                        for vi in range(internal_vertices_count):
+                            row = current_mesh_weights[vi]
+                            total = sum(row)
+                            if total > 0.0:
+                                current_mesh_weights[vi] = [float(w / total) for w in row]
+                            else:
+                                # Fallback jika vertex tidak punya weight, pasang ke bone utama mesh
+                                current_mesh_weights[vi] = [1.0] + [0.0] * (desired_slots - 1)
+
+        mesh_bones.append(current_mesh_bones)
+        mesh_bones_weight.append(current_mesh_weights)
+        # =================================================================
+
+        # 6. Materials & faces setup
+        mesh_material_count.append(len(materials))
+        mesh_material_texture.append([])
+        mesh_material_faces_count.append([])
+
+        for j, mat_name in enumerate(materials):
+            mesh_material[i].append(copy.deepcopy(mesh_material[0][0]))
+            texture_count += 1
+            mesh_material_texture[i].append(texture_count - 1)
+
+            mesh_material_faces_count[i].append(len(faces_norm[j]))
+            mesh_material_faces_header_offset[i].append(0)
+            mesh_material_faces_start_offset[i].append(0)
+
+            mesh_faces_header[i].append([])
+            mesh_face_count[i].append([])
+            mesh_face_offset[i].append([])
+            mesh_face[i].append([])
+
+            for tri in faces_norm[j]:
+                triangle = [int(v) for v in tri]
+                mesh_faces_header[i][j].append(copy.deepcopy(mesh_faces_header[0][0][0]))
+                mesh_face_count[i][j].append(len(triangle))
+                mesh_face_offset[i][j].append(0)
+                mesh_face[i][j].append(triangle)
+
+            tex_name_found = find_texture_name_for_material(root, mat_name, ns)
+            if tex_name_found:
+                base = os.path.basename(tex_name_found)
+                name_no_ext = os.path.splitext(base)[0]
+            else:
+                name_no_ext = mat_name
+
+            tex_name = name_no_ext.encode("ascii", errors="ignore").decode("ascii")
+            tex_name = tex_name.replace("\x00", "").strip()[:16]
+            if "." in tex_name and tex_name.lower().endswith(("tga","png","jpg","jpeg","bmp","dds")):
+                tex_name = tex_name.rsplit(".", 1)[0][:16]
+
+            texture.append(tex_name)
+
+        if verbose:
+            print(f"Mesh {i} Berhasil! Jumlah Vertex (mesh_data_count): {internal_vertices_count}")
+            
+    return True#GUI
 def reset_variables():
     global header, all_offset, mesh_count, bone_count, texture_count
     global mesh_header_start_offset, bones_start_offset, texture_offset, model_name_offset, model_count
@@ -3168,7 +3443,7 @@ def import_from_dae_mesh_GUI():
 
     try:
         # panggil prosedur import dae (yang sudah kita buat)
-        import_from_dae_mesh(filepath)
+        import_from_dae(filepath)
     except Exception as e:
         messagebox.showerror("Error", f"Import gagal: {e}")
         return
@@ -3299,6 +3574,6 @@ tk.Button(row2_frame, text="Import All .OBJ", command=import_all_object).pack(si
 row3_frame = tk.Frame(root)
 row3_frame.grid(row=4, column=0, columnspan=3, pady=5)
 tk.Button(row3_frame, text="Export All As One .DAE", command=export_as_one_dae_GUI).pack(side=tk.LEFT, padx=5)
-tk.Button(row3_frame, text="Import All from .DAE (Add Mesh)", command=import_from_dae_mesh_GUI).pack(side=tk.LEFT, padx=5)
-tk.Button(row3_frame, text="Import All from .DAE (Weight)", command=import_from_dae_weight_GUI).pack(side=tk.LEFT, padx=5)
+tk.Button(row3_frame, text="Import All from .DAE (Add New)", command=import_from_dae_mesh_GUI).pack(side=tk.LEFT, padx=5)
+tk.Button(row3_frame, text="Import All from .DAE (Replace Weight)", command=import_from_dae_weight_GUI).pack(side=tk.LEFT, padx=5)
 root.mainloop()
