@@ -1467,341 +1467,6 @@ def import_object_data(filename):
     except IOError:
         print(f"Cannot open {filename}")
         return 1
-def export_as_one_dae(filename):
-    """
-    Robust COLLADA exporter that preserves bone slot order and writes unique placeholders
-    for dummy slots so joint_local indices remain stable across import/export cycles.
-    Relies on global arrays used in your project:
-      mesh_count, mesh_data_count, mesh_bones_count, mesh_bones, mesh_bones_weight,
-      mesh_vertex_x, mesh_vertex_y, mesh_vertex_z, mesh_normal_x, mesh_normal_y, mesh_normal_z,
-      mesh_uv_u, mesh_uv_v, mesh_material_count, mesh_material, mesh_material_texture,
-      mesh_material_faces_count, mesh_face, mesh_face_count,
-      bone_count, bone_parrent, bone_name,
-      bone_local_position_x, bone_local_position_y, bone_local_position_z,
-      bone_rotation_x, bone_rotation_y, bone_rotation_z
-    """
-    # helper matrix ops (reuse your existing helpers if present)
-    def mat_mult(a, b):
-        r = [0.0]*16
-        for i in range(4):
-            for j in range(4):
-                s = 0.0
-                for k in range(4):
-                    s += a[i*4 + k] * b[k*4 + j]
-                r[i*4 + j] = s
-        return r
-
-    def mat_inverse(a):
-        inv = [0.0]*16
-        m = a
-        inv[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10]
-        inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10]
-        inv[8] = m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9]
-        inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9]
-        inv[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10]
-        inv[5] = m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10]
-        inv[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9]
-        inv[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9]
-        inv[2] = m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6]
-        inv[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6]
-        inv[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5]
-        inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5]
-        inv[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6]
-        inv[7] = m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6]
-        inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5]
-        inv[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5]
-        det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12]
-        if abs(det) < 1e-12:
-            return [1.0,0,0,0, 0,1.0,0,0, 0,0,1.0,0, 0,0,0,1.0]
-        inv_det = 1.0 / det
-        return [x * inv_det for x in inv]
-
-    def make_matrix(px, py, pz, rx, ry, rz):
-        cx, cy, cz = math.cos(rx), math.cos(ry), math.cos(rz)
-        sx, sy, sz = math.sin(rx), math.sin(ry), math.sin(rz)
-        m00 = cy*cz
-        m01 = -cy*sz
-        m02 = sy
-        m10 = sx*sy*cz+cx*sz
-        m11 = -sx*sy*sz+cx*cz
-        m12 = -sx*cy
-        m20 = -cx*sy*cz+sx*sz
-        m21 = cx*sy*sz+sx*cz
-        m22 = cx*cy
-        return f"{m00} {m01} {m02} {px}  {m10} {m11} {m12} {py}  {m20} {m21} {m22} {pz}  0 0 0 1"
-
-    # Build COLLADA root
-    collada = ET.Element("COLLADA", {
-        "xmlns": "http://www.collada.org/2005/11/COLLADASchema",
-        "version": "1.4.1"
-    })
-
-    # --- Geometries ---
-    lib_geom = ET.SubElement(collada, "library_geometries")
-    for i in range(mesh_count):
-        geom = ET.SubElement(lib_geom, "geometry", id=f"Mesh{i}", name=f"Mesh{i}")
-        mesh = ET.SubElement(geom, "mesh")
-        pos_source = ET.SubElement(mesh, "source", id=f"Mesh{i}-positions")
-        pos_array = ET.SubElement(pos_source, "float_array",
-                                  id=f"Mesh{i}-positions-array",
-                                  count=str(mesh_data_count[i]*3))
-        verts = []
-        for j in range(mesh_data_count[i]):
-            verts.extend([mesh_vertex_x[i][j], mesh_vertex_y[i][j], mesh_vertex_z[i][j]])
-        pos_array.text = " ".join(str(round(v,6)) for v in verts)
-        tech = ET.SubElement(pos_source, "technique_common")
-        acc = ET.SubElement(tech, "accessor",
-                            source=f"#Mesh{i}-positions-array",
-                            count=str(mesh_data_count[i]), stride="3")
-        ET.SubElement(acc, "param", name="X", type="float")
-        ET.SubElement(acc, "param", name="Y", type="float")
-        ET.SubElement(acc, "param", name="Z", type="float")
-        vertices = ET.SubElement(mesh, "vertices", id=f"Mesh{i}-vertices")
-        ET.SubElement(vertices, "input", semantic="POSITION", source=f"#Mesh{i}-positions")
-        # faces -> triangles conversion (reuse your logic)
-        tris_list = []
-        for j in range(mesh_material_count[i]):
-            for k in range(mesh_material_faces_count[i][j]):
-                face_indices = mesh_face[i][j][k]
-                if len(face_indices) >= 3:
-                    tris_list.append([face_indices[0], face_indices[1], face_indices[2]])
-                    for n in range(1, len(face_indices)-2):
-                        if n % 2 == 1:
-                            v1, v2, v3 = face_indices[n], face_indices[n+2], face_indices[n+1]
-                        else:
-                            v1, v2, v3 = face_indices[n], face_indices[n+1], face_indices[n+2]
-                        tris_list.append([v1, v2, v3])
-        tris = ET.SubElement(mesh, "triangles", count=str(len(tris_list)))
-        ET.SubElement(tris, "input", semantic="VERTEX", source=f"#Mesh{i}-vertices", offset="0")
-        p = ET.SubElement(tris, "p")
-        p.text = " ".join(str(idx) for tri in tris_list for idx in tri)
-
-    # --- Controllers ---
-    lib_ctrl = ET.SubElement(collada, "library_controllers")
-
-    # Precompute world matrices for bones
-    world_mats = {}
-    identity = [1.0,0,0,0, 0,1.0,0,0, 0,0,1.0,0, 0,0,0,1.0]
-    for b in range(bone_count):
-        chain = []
-        p = b
-        while p >= 0 and p < bone_count:
-            chain.append(p)
-            p = bone_parrent[p]
-        mat = identity[:]
-        for node in reversed(chain):
-            local = make_matrix(
-                bone_local_position_x[node],
-                bone_local_position_y[node],
-                bone_local_position_z[node],
-                bone_rotation_x[node],
-                bone_rotation_y[node],
-                bone_rotation_z[node]
-            )
-            # parse local into list of floats if make_matrix returns string
-            if isinstance(local, str):
-                local_list = [float(x) for x in local.split()]
-            else:
-                local_list = local
-            mat = mat_mult(mat, local_list)
-        world_mats[b] = mat
-
-    # determine a consistent root index fallback
-    global_roots = [idx for idx,p in enumerate(bone_parrent) if p < 0]
-    root_idx = global_roots[0] if global_roots else 0
-
-    for i in range(mesh_count):
-        ctrl = ET.SubElement(lib_ctrl, "controller", id=f"Mesh{i}-skin")
-        skin = ET.SubElement(ctrl, "skin", source=f"#Mesh{i}")
-        ET.SubElement(skin, "bind_shape_matrix").text = "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1"
-
-        # --- Build slot_bones preserving slot count and order ---
-        slot_bones = []
-        pad_counter = 0
-        desired_slots = mesh_bones_count[i] if i < len(mesh_bones_count) else len(mesh_bones[i])
-        # ensure mesh_bones[i] exists
-        mb = mesh_bones[i] if i < len(mesh_bones) else [root_idx]*desired_slots
-        for sidx in range(desired_slots):
-            if sidx < len(mb):
-                b = mb[sidx]
-            else:
-                b = None
-            if isinstance(b, int) and 0 <= b < bone_count:
-                slot_bones.append((b, bone_name[b]))
-            else:
-                # placeholder unique name to avoid duplicates
-                placeholder_name = f"__pad_mesh{i}_slot{sidx}"
-                slot_bones.append((None, placeholder_name))
-                pad_counter += 1
-
-        # Name_array
-        src_joints = ET.SubElement(skin, "source", id=f"Mesh{i}-joints")
-        name_array = ET.SubElement(src_joints, "Name_array",
-                                   id=f"Mesh{i}-joints-array",
-                                   count=str(len(slot_bones)))
-        name_array.text = " ".join(name for (_, name) in slot_bones)
-        tech = ET.SubElement(src_joints, "technique_common")
-        acc = ET.SubElement(tech, "accessor",
-                            source=f"#Mesh{i}-joints-array",
-                            count=str(len(slot_bones)), stride="1")
-        ET.SubElement(acc, "param", name="JOINT", type="Name")
-
-        # bindposes: write per slot in same order; placeholder -> identity
-        bindpose_list = []
-        for gb_idx, _ in slot_bones:
-            if gb_idx is None:
-                bindpose_list.extend(identity)
-            else:
-                world = world_mats.get(gb_idx, identity)
-                inv_world = mat_inverse(world)
-                bindpose_list.extend(inv_world)
-        src_bind = ET.SubElement(skin, "source", id=f"Mesh{i}-bindposes")
-        float_array = ET.SubElement(src_bind, "float_array",
-                                    id=f"Mesh{i}-bindposes-array",
-                                    count=str(len(bindpose_list)))
-        float_array.text = " ".join(str(round(x,6)) for x in bindpose_list)
-        tech = ET.SubElement(src_bind, "technique_common")
-        acc = ET.SubElement(tech, "accessor",
-                            source=f"#Mesh{i}-bindposes-array",
-                            count=str(len(slot_bones)), stride="16")
-        ET.SubElement(acc, "param", name="TRANSFORM", type="float4x4")
-
-        # weights and mapping
-        # bone_index_map maps global bone index -> first slot index where it appears
-        bone_index_map = {}
-        for idx_slot, (gb_idx, _) in enumerate(slot_bones):
-            if gb_idx is not None and gb_idx not in bone_index_map:
-                bone_index_map[gb_idx] = idx_slot
-
-        weights_flat = []
-        vcount_list = []
-        vw_pairs = []
-        weight_counter = 0
-
-        # For each vertex, map internal slot weights to joint_local indices (slot positions)
-        for vtx in range(mesh_data_count[i]):
-            # ensure mesh_bones_weight exists
-            weights = mesh_bones_weight[i][vtx] if (i < len(mesh_bones_weight) and vtx < len(mesh_bones_weight[i])) else [0.0]*desired_slots
-            # accumulate pairs (joint_local, weight)
-            mapped_pairs = []
-            # weights is list per-slot aligned with mesh_bones[i] order
-            for local_slot_idx, w in enumerate(weights):
-                if w <= 1e-6:
-                    continue
-                # find corresponding global bone index for this slot
-                gb = mb[local_slot_idx] if local_slot_idx < len(mb) else None
-                if not (isinstance(gb, int) and 0 <= gb < bone_count):
-                    # slot maps to placeholder or invalid bone -> skip
-                    continue
-                # joint_local is the slot index in slot_bones where this global bone appears
-                joint_local = bone_index_map.get(gb, None)
-                if joint_local is None:
-                    # bone not present in slot_bones (shouldn't happen) -> skip
-                    continue
-                mapped_pairs.append((joint_local, w))
-            total = sum(w for _, w in mapped_pairs)
-            if total > 0:
-                mapped_pairs = [(j, w/total) for j, w in mapped_pairs]
-            vcount_list.append(len(mapped_pairs))
-            for joint_idx, w in mapped_pairs:
-                vw_pairs.extend([joint_idx, weight_counter])
-                weights_flat.append(w)
-                weight_counter += 1
-
-        # write weights source
-        src_weights = ET.SubElement(skin, "source", id=f"Mesh{i}-weights")
-        float_array = ET.SubElement(src_weights, "float_array",
-                                    id=f"Mesh{i}-weights-array",
-                                    count=str(len(weights_flat)))
-        float_array.text = " ".join(str(round(w,6)) for w in weights_flat)
-        tech = ET.SubElement(src_weights, "technique_common")
-        acc = ET.SubElement(tech, "accessor",
-                            source=f"#Mesh{i}-weights-array",
-                            count=str(len(weights_flat)), stride="1")
-        ET.SubElement(acc, "param", name="WEIGHT", type="float")
-
-        # joints block
-        joints_block = ET.SubElement(skin, "joints")
-        ET.SubElement(joints_block, "input", semantic="JOINT", source=f"#Mesh{i}-joints")
-        ET.SubElement(joints_block, "input", semantic="INV_BIND_MATRIX", source=f"#Mesh{i}-bindposes")
-
-        # vertex_weights
-        vw_el = ET.SubElement(skin, "vertex_weights", count=str(mesh_data_count[i]))
-        ET.SubElement(vw_el, "input", semantic="JOINT", source=f"#Mesh{i}-joints", offset="0")
-        ET.SubElement(vw_el, "input", semantic="WEIGHT", source=f"#Mesh{i}-weights", offset="1")
-        vcount_el = ET.SubElement(vw_el, "vcount")
-        vcount_el.text = " ".join(str(x) for x in vcount_list)
-        v_el = ET.SubElement(vw_el, "v")
-        v_el.text = " ".join(str(x) for x in vw_pairs)
-
-    # --- Visual Scene : export SELURUH skeleton ---
-    lib_scene = ET.SubElement(collada, "library_visual_scenes")
-    scene = ET.SubElement(lib_scene, "visual_scene", id="Scene", name="Scene")
-    armature_node = ET.SubElement(scene, "node",
-                                id="Armature",
-                                name="Armature",
-                                type="NODE")
-
-    # export semua bone, bukan hanya yang dipakai mesh
-    export_bones = list(range(bone_count))
-
-    # buat node untuk semua bone
-    bone_nodes = {}
-
-    for b in export_bones:
-        node = ET.Element(
-            "node",
-            id=bone_name[b],
-            name=bone_name[b],
-            sid=bone_name[b],
-            type="JOINT"
-        )
-
-        mat = ET.SubElement(node, "matrix")
-        mat.text = make_matrix(
-            bone_local_position_x[b],
-            bone_local_position_y[b],
-            bone_local_position_z[b],
-            bone_rotation_x[b],
-            bone_rotation_y[b],
-            bone_rotation_z[b]
-        )
-
-        bone_nodes[b] = node
-
-    # susun hierarchy sesuai parent asli
-    for b in export_bones:
-        parent = bone_parrent[b]
-
-        if (
-            parent >= 0
-            and parent < bone_count
-            and parent in bone_nodes
-        ):
-            bone_nodes[parent].append(bone_nodes[b])
-        else:
-            armature_node.append(bone_nodes[b])
-
-    # cari root pertama untuk skeleton controller
-    root_idx = next(
-        (i for i, p in enumerate(bone_parrent) if p < 0),
-        0
-    )
-    for i in range(mesh_count):
-        mesh_node = ET.SubElement(armature_node, "node", id=f"Object{i}", name=f"Object{i}")
-        inst_ctrl = ET.SubElement(mesh_node, "instance_controller", url=f"#Mesh{i}-skin")
-        ET.SubElement(inst_ctrl, "skeleton").text = f"#{bone_name[root_idx]}"
-
-    # scene root
-    sc = ET.SubElement(collada, "scene")
-    ET.SubElement(sc, "instance_visual_scene", url="#Scene")
-
-    # write file
-    tree = ET.ElementTree(collada)
-    tree.write(filename, encoding="utf-8", xml_declaration=True)
-
-    # optional: return True for success
-    return True
 def export_dae(i, filename):
     collada = ET.Element("COLLADA", {
         "xmlns": "http://www.collada.org/2005/11/COLLADASchema",
@@ -1999,7 +1664,369 @@ def export_dae(i, filename):
     # Simpan ke file
     tree = ET.ElementTree(collada)
     tree.write(filename, encoding="utf-8", xml_declaration=True)
+def export_as_one_dae(filename):
+    """
+    Robust COLLADA exporter yang sinkron 100% dengan fungsi import_from_dae.
+    Mendukung Real Materials dengan Image Texture Binding (.png) otomatis dari folder yang sama.
+    """
+    global mesh_count, mesh_data_count, mesh_bones_count, mesh_bones, mesh_bones_weight
+    global mesh_vertex_x, mesh_vertex_y, mesh_vertex_z, mesh_normal_x, mesh_normal_y, mesh_normal_z
+    global mesh_uv_u, mesh_uv_v, mesh_material_count, mesh_material_texture, mesh_material_faces_count
+    global mesh_face, bone_count, bone_parrent, bone_name
+    global bone_local_position_x, bone_local_position_y, bone_local_position_z
+    global bone_rotation_x, bone_rotation_y, bone_rotation_z, texture
+
+    # --- Helper Matriks & Rotasi ---
+    def mat_mult(a, b):
+        r = [0.0]*16
+        for i in range(4):
+            for j in range(4):
+                s = 0.0
+                for k in range(4): s += a[i*4 + k] * b[k*4 + j]
+                r[i*4 + j] = s
+        return r
+
+    def mat_inverse(a):
+        inv = [0.0]*16
+        m = a
+        inv[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10]
+        inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10]
+        inv[8] = m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9]
+        inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9]
+        inv[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10]
+        inv[5] = m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10]
+        inv[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9]
+        inv[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9]
+        inv[2] = m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6]
+        inv[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6]
+        inv[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5]
+        inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5]
+        inv[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6]
+        inv[7] = m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6]
+        inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5]
+        inv[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5]
+        det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12]
+        if abs(det) < 1e-12: return [1.0,0,0,0, 0,1.0,0,0, 0,0,1.0,0, 0,0,0,1.0]
+        return [x / det for x in inv]
+
+    def make_matrix(px, py, pz, rx, ry, rz):
+        cx, cy, cz = math.cos(rx), math.cos(ry), math.cos(rz)
+        sx, sy, sz = math.sin(rx), math.sin(ry), math.sin(rz)
+        m00, m01, m02 = cy*cz, -cy*sz, sy
+        m10, m11, m12 = sx*sy*cz+cx*sz, -sx*sy*sz+cx*cz, -sx*cy
+        m20, m21, m22 = -cx*sy*cz+sx*sz, cx*sy*sz+sx*cz, cx*cy
+        return f"{m00} {m01} {m02} {px} {m10} {m11} {m12} {py} {m20} {m21} {m22} {pz} 0 0 0 1"
+
+    def rotate_3d_x(x, y, z, angle_deg):
+        rad = math.radians(angle_deg)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        return x, y * cos_a - z * sin_a, y * sin_a + z * cos_a
+
+    mesh_material_mappings = []
+    unique_materials = sorted(list(set(texture)))
+
+    collada = ET.Element("COLLADA", {"xmlns": "http://www.collada.org/2005/11/COLLADASchema", "version": "1.4.1"})
+    
+    asset = ET.SubElement(collada, "asset")
+    ET.SubElement(asset, "up_axis").text = "Z_UP"
+
+    # =================================================================
+    # [BARU] DUKUNGAN LINK GAMBAR TEKSTUR (.png otomatis selevel folder)
+    # =================================================================
+    # 1. Library Images (Mendaftarkan path file gambar eksternal)
+    lib_images = ET.SubElement(collada, "library_images")
+    for mat_name in unique_materials:
+        img_node = ET.SubElement(lib_images, "image", id=f"{mat_name}-image", name=f"{mat_name}-image")
+        # Menggunakan path relatif langsung ("head.png") agar Blender mencari di folder yang sama dengan file DAE
+        ET.SubElement(img_node, "init_from").text = f"{mat_name}.png"
+
+    # 2. Library Effects (Konfigurasi Sampler2D & Surface Tekstur)
+    lib_effects = ET.SubElement(collada, "library_effects")
+    for mat_name in unique_materials:
+        eff = ET.SubElement(lib_effects, "effect", id=f"{mat_name}-effect")
+        profile = ET.SubElement(eff, "profile_COMMON")
+        
+        # Buat parameter 2D Surface yang merujuk ke Image ID
+        newparam_surf = ET.SubElement(profile, "newparam", sid=f"{mat_name}-surface")
+        surf = ET.SubElement(newparam_surf, "surface", type="2D")
+        ET.SubElement(surf, "init_from").text = f"{mat_name}-image"
+        
+        # Buat parameter Sampler2D yang membungkus Surface tersebut
+        newparam_samp = ET.SubElement(profile, "newparam", sid=f"{mat_name}-sampler")
+        samp = ET.SubElement(newparam_samp, "sampler2D")
+        ET.SubElement(samp, "source").text = f"{mat_name}-surface"
+        
+        technique = ET.SubElement(profile, "technique", sid="common")
+        lambert = ET.SubElement(technique, "lambert")
+        diffuse = ET.SubElement(lambert, "diffuse")
+        
+        # Definisikan elemen tekstur nyata alih-alih sekadar warna flat <color>
+        tex_el = ET.SubElement(diffuse, "texture", texture=f"{mat_name}-sampler", texcoord="UVSET0")
+
+    # 3. Library Materials
+    lib_materials = ET.SubElement(collada, "library_materials")
+    for mat_name in unique_materials:
+        material_node = ET.SubElement(lib_materials, "material", id=mat_name, name=mat_name)
+        ET.SubElement(material_node, "instance_effect", url=f"#{mat_name}-effect")
+
+    # =================================================================
+    # 4. Library Geometries (Vertex, Normal, UV)
+    # =================================================================
+    lib_geom = ET.SubElement(collada, "library_geometries")
+    for i in range(mesh_count):
+        v_count = mesh_data_count[i]
+        geom = ET.SubElement(lib_geom, "geometry", id=f"Mesh{i}", name=f"Mesh{i}")
+        mesh = ET.SubElement(geom, "mesh")
+
+        # --- A. POSITIONS DATA ---
+        pos_source = ET.SubElement(mesh, "source", id=f"Mesh{i}-positions")
+        pos_array = ET.SubElement(pos_source, "float_array", id=f"Mesh{i}-positions-array", count=str(v_count * 3))
+        verts_flat = []
+        for j in range(v_count):
+            vx, vy, vz = mesh_vertex_x[i][j], mesh_vertex_y[i][j], mesh_vertex_z[i][j]
+            rx, ry, rz = rotate_3d_x(vx, vy, vz, -90)
+            verts_flat.extend([rx, -rz, ry])
+        pos_array.text = " ".join(str(round(v, 6)) for v in verts_flat)
+        tech_pos = ET.SubElement(pos_source, "technique_common")
+        acc_pos = ET.SubElement(tech_pos, "accessor", source=f"#Mesh{i}-positions-array", count=str(v_count), stride="3")
+        for ax in ["X", "Y", "Z"]: ET.SubElement(acc_pos, "param", name=ax, type="float")
+
+        # --- B. NORMALS DATA ---
+        norm_source = ET.SubElement(mesh, "source", id=f"Mesh{i}-normals")
+        norm_array = ET.SubElement(norm_source, "float_array", id=f"Mesh{i}-normals-array", count=str(v_count * 3))
+        norms_flat = []
+        for j in range(v_count):
+            nx, ny, nz = mesh_normal_x[i][j], mesh_normal_y[i][j], mesh_normal_z[i][j]
+            
+            # KOREKSI: Putar aksis normal agar selaras dengan posisi vertex
+            rnx, rny, rnz = rotate_3d_x(nx, ny, nz, -90)
+            transformed_nx, transformed_ny, transformed_nz = rnx, -rnz, rny
+            
+            # Normalisasi vektor hasil rotasi agar panjangnya tepat 1.0 (standar COLLADA)
+            length = (transformed_nx**2 + transformed_ny**2 + transformed_nz**2)**0.5
+            if length > 0.0: 
+                transformed_nx /= length
+                transformed_ny /= length
+                transformed_nz /= length
+            else:
+                transformed_nx, transformed_ny, transformed_nz = 0.0, 0.0, 1.0 # fallback default Z-up
+                
+            norms_flat.extend([transformed_nx, transformed_ny, transformed_nz])
+            
+        norm_array.text = " ".join(str(round(n, 6)) for n in norms_flat)
+        tech_norm = ET.SubElement(norm_source, "technique_common")
+        acc_norm = ET.SubElement(tech_norm, "accessor", source=f"#Mesh{i}-normals-array", count=str(v_count), stride="3")
+        for ax in ["X", "Y", "Z"]: ET.SubElement(acc_norm, "param", name=ax, type="float")
+
+        # --- C. UV DATA ---
+        uv_source = ET.SubElement(mesh, "source", id=f"Mesh{i}-uvs")
+        uv_array = ET.SubElement(uv_source, "float_array", id=f"Mesh{i}-uvs-array", count=str(v_count * 2))
+        uvs_flat = []
+        for j in range(v_count):
+            uvs_flat.extend([mesh_uv_u[i][j], mesh_uv_v[i][j]])
+        uv_array.text = " ".join(str(round(u, 6)) for u in uvs_flat)
+        tech_uv = ET.SubElement(uv_source, "technique_common")
+        acc_uv = ET.SubElement(tech_uv, "accessor", source=f"#Mesh{i}-uvs-array", count=str(v_count), stride="2")
+        ET.SubElement(acc_uv, "param", name="S", type="float")
+        ET.SubElement(acc_uv, "param", name="T", type="float")
+
+        # --- D. VERTICES BLOCK ---
+        vertices = ET.SubElement(mesh, "vertices", id=f"Mesh{i}-vertices")
+        ET.SubElement(vertices, "input", semantic="POSITION", source=f"#Mesh{i}-positions")
+
+        # --- E. MULTI-MATERIAL & TRIANGLES BLOCK ---
+        mesh_mats = []
+        for j in range(mesh_material_count[i]):
+            tex_idx = mesh_material_texture[i][j]
+            mat_name = texture[tex_idx] if tex_idx < len(texture) else f"Material_{tex_idx}"
+            mesh_mats.append(mat_name)
+
+            tris_list = []
+            for k in range(mesh_material_faces_count[i][j]):
+                face_indices = mesh_face[i][j][k]
+                if len(face_indices) < 3:
+                    continue
+                
+                # Segitiga pertama (Pasti searah bawaan)
+                tris_list.append([face_indices[0], face_indices[1], face_indices[2]])
+                
+                # Triangulasi fan/strip untuk sisa vertex (Quad / Polygon)
+                for n in range(1, len(face_indices) - 2):
+                    if n % 2 == 1:
+                        # Balik urutan vertex (v3 dulu baru v2) agar Winding Order COLLADA konsisten
+                        v1, v2, v3 = face_indices[n], face_indices[n+2], face_indices[n+1]
+                    else:
+                        v1, v2, v3 = face_indices[n], face_indices[n+1], face_indices[n+2]
+                    tris_list.append([v1, v2, v3])
+
+            if not tris_list:
+                continue
+
+            tris_element = ET.SubElement(mesh, "triangles", count=str(len(tris_list)), material=mat_name)
+            ET.SubElement(tris_element, "input", semantic="VERTEX", source=f"#Mesh{i}-vertices", offset="0")
+            ET.SubElement(tris_element, "input", semantic="NORMAL", source=f"#Mesh{i}-normals", offset="1")
+            ET.SubElement(tris_element, "input", semantic="TEXCOORD", source=f"#Mesh{i}-uvs", offset="2", set="0")
+
+            p_values = []
+            for tri in tris_list:
+                for idx in tri:
+                    p_values.extend([idx, idx, idx])
+            
+            p_elem = ET.SubElement(tris_element, "p")
+            p_elem.text = " ".join(str(x) for x in p_values)
+
+        mesh_material_mappings.append(mesh_mats)
+
+    # =================================================================
+    # 5. Library Controllers (Skinning Data)
+    # =================================================================
+    lib_ctrl = ET.SubElement(collada, "library_controllers")
+    world_mats = {}
+    identity = [1.0,0,0,0, 0,1.0,0,0, 0,0,1.0,0, 0,0,0,1.0]
+    
+    for b in range(bone_count):
+        chain = []
+        p = b
+        while p >= 0 and p < bone_count:
+            chain.append(p)
+            p = bone_parrent[p]
+        mat = identity[:]
+        for node in reversed(chain):
+            local = make_matrix(
+                bone_local_position_x[node], bone_local_position_y[node], bone_local_position_z[node],
+                bone_rotation_x[node], bone_rotation_y[node], bone_rotation_z[node]
+            )
+            local_list = [float(x) for x in local.split()] if isinstance(local, str) else local
+            mat = mat_mult(mat, local_list)
+        world_mats[b] = mat
+
+    global_roots = [idx for idx, p in enumerate(bone_parrent) if p < 0]
+    fallback_root = global_roots[0] if global_roots else 0
+
+    for i in range(mesh_count):
+        v_count = mesh_data_count[i]
+        ctrl = ET.SubElement(lib_ctrl, "controller", id=f"Mesh{i}-skin")
+        skin = ET.SubElement(ctrl, "skin", source=f"#Mesh{i}")
+        ET.SubElement(skin, "bind_shape_matrix").text = "1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1"
+
+        desired_slots = mesh_bones_count[i] if i < len(mesh_bones_count) else 8
+        mb = mesh_bones[i] if i < len(mesh_bones) else [fallback_root]*desired_slots
+        
+        slot_bones = []
+        for sidx in range(desired_slots):
+            b = mb[sidx] if sidx < len(mb) else None
+            if isinstance(b, int) and 0 <= b < bone_count:
+                slot_bones.append((b, bone_name[b]))
+            else:
+                slot_bones.append((None, f"__pad_mesh{i}_slot{sidx}"))
+
+        src_joints = ET.SubElement(skin, "source", id=f"Mesh{i}-joints")
+        name_array = ET.SubElement(src_joints, "Name_array", id=f"Mesh{i}-joints-array", count=str(len(slot_bones)))
+        name_array.text = " ".join(name for (_, name) in slot_bones)
+        tech_j = ET.SubElement(src_joints, "technique_common")
+        acc_j = ET.SubElement(tech_j, "accessor", source=f"#Mesh{i}-joints-array", count=str(len(slot_bones)), stride="1")
+        ET.SubElement(acc_j, "param", name="JOINT", type="Name")
+
+        bindpose_list = []
+        for gb_idx, _ in slot_bones:
+            if gb_idx is None: bindpose_list.extend(identity)
+            else: bindpose_list.extend(mat_inverse(world_mats.get(gb_idx, identity)))
+        
+        src_bind = ET.SubElement(skin, "source", id=f"Mesh{i}-bindposes")
+        float_array_b = ET.SubElement(src_bind, "float_array", id=f"Mesh{i}-bindposes-array", count=str(len(bindpose_list)))
+        float_array_b.text = " ".join(str(round(x, 6)) for x in bindpose_list)
+        tech_b = ET.SubElement(src_bind, "technique_common")
+        acc_b = ET.SubElement(tech_b, "accessor", source=f"#Mesh{i}-bindposes-array", count=str(len(slot_bones)), stride="16")
+        ET.SubElement(acc_b, "param", name="TRANSFORM", type="float4x4")
+
+        weights_flat = []
+        vcount_list = []
+        vw_pairs = []
+        weight_counter = 0
+
+        for vtx in range(v_count):
+            weights = mesh_bones_weight[i][vtx] if (i < len(mesh_bones_weight) and vtx < len(mesh_bones_weight[i])) else [0.0]*desired_slots
+            mapped_pairs = []
+            for local_slot_idx, w in enumerate(weights):
+                if w <= 1e-5: continue
+                mapped_pairs.append((local_slot_idx, w))
+            
+            total_w = sum(w for _, w in mapped_pairs)
+            if total_w > 0.0: mapped_pairs = [(slot, w/total_w) for slot, w in mapped_pairs]
+            else: mapped_pairs = [(0, 1.0)]
+
+            vcount_list.append(len(mapped_pairs))
+            for slot_idx, w in mapped_pairs:
+                vw_pairs.extend([slot_idx, weight_counter])
+                weights_flat.append(w)
+                weight_counter += 1
+
+        src_weights = ET.SubElement(skin, "source", id=f"Mesh{i}-weights")
+        float_array_w = ET.SubElement(src_weights, "float_array", id=f"Mesh{i}-weights-array", count=str(len(weights_flat)))
+        float_array_w.text = " ".join(str(round(w, 6)) for w in weights_flat)
+        tech_w = ET.SubElement(src_weights, "technique_common")
+        acc_w = ET.SubElement(tech_w, "accessor", source=f"#Mesh{i}-weights-array", count=str(len(weights_flat)), stride="1")
+        ET.SubElement(acc_w, "param", name="WEIGHT", type="float")
+
+        joints_block = ET.SubElement(skin, "joints")
+        ET.SubElement(joints_block, "input", semantic="JOINT", source=f"#Mesh{i}-joints")
+        ET.SubElement(joints_block, "input", semantic="INV_BIND_MATRIX", source=f"#Mesh{i}-bindposes")
+
+        vw_el = ET.SubElement(skin, "vertex_weights", count=str(v_count))
+        ET.SubElement(vw_el, "input", semantic="JOINT", source=f"#Mesh{i}-joints", offset="0")
+        ET.SubElement(vw_el, "input", semantic="WEIGHT", source=f"#Mesh{i}-weights", offset="1")
+        ET.SubElement(vw_el, "vcount").text = " ".join(str(x) for x in vcount_list)
+        ET.SubElement(vw_el, "v").text = " ".join(str(x) for x in vw_pairs)
+
+    # =================================================================
+    # 6. Library Visual Scenes
+    # =================================================================
+    lib_scene = ET.SubElement(collada, "library_visual_scenes")
+    scene = ET.SubElement(lib_scene, "visual_scene", id="Scene", name="Scene")
+    armature_node = ET.SubElement(scene, "node", id="Armature", name="Armature", type="NODE")
+
+    bone_nodes = {}
+    for b in range(bone_count):
+        node = ET.Element("node", id=bone_name[b], name=bone_name[b], sid=bone_name[b], type="JOINT")
+        mat_elem = ET.SubElement(node, "matrix")
+        mat_elem.text = make_matrix(
+            bone_local_position_x[b], bone_local_position_y[b], bone_local_position_z[b],
+            bone_rotation_x[b], bone_rotation_y[b], bone_rotation_z[b]
+        )
+        bone_nodes[b] = node
+
+    for b in range(bone_count):
+        parent = bone_parrent[b]
+        if parent >= 0 and parent < bone_count and parent in bone_nodes:
+            bone_nodes[parent].append(bone_nodes[b])
+        else:
+            armature_node.append(bone_nodes[b])
+
+    root_idx = next((i for i, p in enumerate(bone_parrent) if p < 0), 0)
+    for i in range(mesh_count):
+        mesh_node = ET.SubElement(armature_node, "node", id=f"Object{i}", name=f"Object{i}")
+        inst_ctrl = ET.SubElement(mesh_node, "instance_controller", url=f"#Mesh{i}-skin")
+        ET.SubElement(inst_ctrl, "skeleton").text = f"#{bone_name[root_idx]}"
+        
+        if i < len(mesh_material_mappings) and mesh_material_mappings[i]:
+            bind_mat = ET.SubElement(inst_ctrl, "bind_material")
+            tech_bmat = ET.SubElement(bind_mat, "technique_common")
+            for mat_name in mesh_material_mappings[i]:
+                # Hubungkan target material ke mapping simbol segitiga di atas
+                inst_m = ET.SubElement(tech_bmat, "instance_material", symbol=mat_name, target=f"#{mat_name}")
+                # Kaitkan input TEXCOORD "0" (yaitu UVSET0 dari elemen <triangles>) ke target pemetaan material
+                ET.SubElement(inst_m, "bind_vertex_input", semantic="UVSET0", input_semantic="TEXCOORD", input_set="0")
+
+    sc = ET.SubElement(collada, "scene")
+    ET.SubElement(sc, "instance_visual_scene", url="#Scene")
+
+    tree = ET.ElementTree(collada)
+    tree.write(filename, encoding="utf-8", xml_declaration=True)
+    return True
 def parse_dae_geometry(geom, ns):
+    """
+    Versi ringkas: Hanya membaca Vertices, UVs, dan Faces_raw tanpa Normal DAE.
+    """
     vertices = []
     uvs = []
     faces_raw = []
@@ -2009,33 +2036,45 @@ def parse_dae_geometry(geom, ns):
     if mesh is None:
         return vertices, uvs, faces_raw, materials
 
-    # Ambil semua source
+    # 1. Ambil semua source data (Float Arrays)
     sources = {}
     for source in mesh.findall("c:source", ns):
         float_array = source.find("c:float_array", ns)
         if float_array is None:
             continue
         values = list(map(float, float_array.text.strip().split()))
-        stride = int(source.find("c:technique_common/c:accessor", ns).attrib["stride"])
+        
+        accessor = source.find("c:technique_common/c:accessor", ns)
+        if accessor is not None and "stride" in accessor.attrib:
+            stride = int(accessor.attrib["stride"])
+        else:
+            stride = 3
+            
         sources[source.attrib["id"]] = (values, stride)
 
-    # Ambil posisi
+    # 2. Ambil data Posisi Vertex (POSITION)
     for verts in mesh.findall("c:vertices", ns):
-        pos_id = verts.find("c:input[@semantic='POSITION']", ns).attrib["source"][1:]
-        values, stride = sources[pos_id]
-        for i in range(0, len(values), stride):
-            vertices.append(tuple(values[i:i+stride]))
+        inp_pos = verts.find("c:input[@semantic='POSITION']", ns)
+        if inp_pos is not None:
+            pos_id = inp_pos.attrib["source"][1:]
+            if pos_id in sources:
+                values, stride = sources[pos_id]
+                for i in range(0, len(values), stride):
+                    vertices.append(tuple(values[i:i+stride]))
 
-    # Ambil UV (TEXCOORD)
+    # 3. Ambil data UV (TEXCOORD)
     for inp in mesh.findall(".//c:input[@semantic='TEXCOORD']", ns):
         src_id = inp.attrib["source"][1:]
         if src_id in sources:
             values, stride = sources[src_id]
-            for i in range(0, len(values), stride):
-                uvs.append(tuple(values[i:i+stride]))
+            if not uvs:
+                for i in range(0, len(values), stride):
+                    uvs.append(tuple(values[i:i+stride]))
 
-    # Ambil faces
-    for tris in mesh.findall("c:triangles", ns):
+    # 4. Ambil data Poligon / Faces
+    face_elements = mesh.findall("c:triangles", ns) + mesh.findall("c:polylist", ns)
+    
+    for tris in face_elements:
         mat = tris.attrib.get("material", "default")
         if mat not in materials:
             materials.append(mat)
@@ -2043,20 +2082,32 @@ def parse_dae_geometry(geom, ns):
 
         inputs = tris.findall("c:input", ns)
         input_map = {inp.attrib["semantic"]: int(inp.attrib["offset"]) for inp in inputs}
-        p = list(map(int, tris.find("c:p", ns).text.strip().split()))
-
+        
+        p_elem = tris.find("c:p", ns)
+        if p_elem is None or not p_elem.text:
+            continue
+            
+        p = list(map(int, p_elem.text.strip().split()))
         stride = max(input_map.values()) + 1
-        for i in range(0, len(p), stride*3):
+
+        for i in range(0, len(p), stride * 3):
             indices = []
             uv_indices = []
+            
             for j in range(3):
-                base = i + j*stride
+                base = i + j * stride
+                if base + max(input_map.values()) >= len(p):
+                    break
+                    
                 v_idx = p[base + input_map["VERTEX"]]
                 indices.append(v_idx)
+                
                 if "TEXCOORD" in input_map:
                     uv_idx = p[base + input_map["TEXCOORD"]]
                     uv_indices.append((v_idx, uv_idx))
-            faces_raw.append((mat_id, indices, uv_indices))
+            
+            if len(indices) == 3:
+                faces_raw.append((mat_id, indices, uv_indices))
 
     return vertices, uvs, faces_raw, materials
 def normalize_dae(vertices, uvs, faces_raw, materials):
@@ -2088,31 +2139,38 @@ def normalize_dae(vertices, uvs, faces_raw, materials):
 def merge_duplicate_vertices(vertices_norm, uvs_norm, faces_norm, index_map_old):
     merged_vertices = []
     merged_uvs = []
-    remap = {}          # key → new_index
-    index_map_new = {}  # (old_v_idx, old_vt_idx) → new_index
+    remap_spatial = {}       # spatial_key -> new_index
+    old_to_new = {}          # old_idx -> new_index
+    
     new_index = 0
 
+    # 1. Gabungkan vertex & buat mapping dari old_idx ke new_index
     for old_key, old_idx in index_map_old.items():
         v = vertices_norm[old_idx]
         uv = uvs_norm[old_idx]
-        key = (round(v[0],6), round(v[1],6), round(v[2],6),
-               round(uv[0],6), round(uv[1],6))
-        if key not in remap:
-            remap[key] = new_index
+        
+        # Key berdasarkan koordinat & UV
+        spatial_key = (
+            round(v[0], 6), round(v[1], 6), round(v[2], 6),
+            round(uv[0], 6), round(uv[1], 6)
+        )
+        
+        if spatial_key not in remap_spatial:
+            remap_spatial[spatial_key] = new_index
             merged_vertices.append(v)
             merged_uvs.append(uv)
             new_index += 1
-        index_map_new[old_key] = remap[key]
+            
+        old_to_new[old_idx] = remap_spatial[spatial_key]
 
-    # remap faces
+    # 2. Remap faces menggunakan array old_to_new (Jauh lebih cepat & aman)
     for mat_faces in faces_norm:
         for tri in mat_faces:
             for k in range(len(tri)):
-                tri[k] = remap[(round(vertices_norm[tri[k]][0],6),
-                                round(vertices_norm[tri[k]][1],6),
-                                round(vertices_norm[tri[k]][2],6),
-                                round(uvs_norm[tri[k]][0],6),
-                                round(uvs_norm[tri[k]][1],6))]
+                tri[k] = old_to_new[tri[k]]
+
+    # Buat index_map_new (old_key -> new_index) untuk dikembalikan
+    index_map_new = {old_key: old_to_new[old_idx] for old_key, old_idx in index_map_old.items()}
 
     return merged_vertices, merged_uvs, faces_norm, index_map_new
 def find_texture_name_for_material(root, mat_name, ns):
@@ -2539,8 +2597,9 @@ def import_from_dae_weight(filepath, verbose=False):
     return True
 def import_from_dae(filepath, verbose=False):
     """
-    Mengimpor Mesh DAE sekaligus memetakan data Bone Weight secara presisi 
-    ke dalam struktur global YOBJ secara sinkron.
+    Mengimpor Mesh DAE dengan DUMMY Vertex Normals (0.0, 1.0, 0.0) 
+    dan memetakan data Bone Weight ke dalam struktur global YOBJ.
+    Transformasi koordinat dan tekstur menggunakan logika dari import_from_dae_mesh.
     """
     global mesh_count, texture_count, bone_name
     
@@ -2566,7 +2625,6 @@ def import_from_dae(filepath, verbose=False):
             m_verts, m_uvs, m_faces, m_idx_map = merge_duplicate_vertices(
                 vertices_norm, uvs_norm, faces_norm, index_map
             )
-            # Validasi jika hasil merge tidak kosong
             if len(m_verts) > 0:
                 vertices_norm = m_verts
                 uvs_norm = m_uvs
@@ -2584,7 +2642,7 @@ def import_from_dae(filepath, verbose=False):
             mesh_count -= 1
             continue
 
-        # 3. Setup header & alokasi struktur YOBJ (Meniru template index 0)
+        # 3. Setup header & alokasi struktur YOBJ
         mesh_header.append(copy.deepcopy(mesh_header[0]))
         mesh_bones_header_offset.append(copy.deepcopy(mesh_bones_header_offset[0]))
         
@@ -2596,11 +2654,9 @@ def import_from_dae(filepath, verbose=False):
         mesh_flag.append(120831)
         read_flag(i)
         
-        # Menentukan panjang byte data per vertex
         mesh_data_lenght.append((mesh_flag_decode[i] + 10) * 4 if mesh_flag_boolean[i] else 36)
         mesh_material_header_offset.append(copy.deepcopy(mesh_material_header_offset[0]))
         
-        # Alokasi list YOBJ agar siap di-append data
         mesh_material.append([])
         mesh_material_faces_header_offset.append([])
         mesh_material_faces_start_offset.append([])
@@ -2609,7 +2665,6 @@ def import_from_dae(filepath, verbose=False):
         mesh_face_offset.append([])
         mesh_face.append([])
         
-        # Masukkan total vertex yang valid ke list YOBJ global
         mesh_data_count.append(internal_vertices_count)
         mesh_data.append([])
         mesh_uv_u.append([])
@@ -2622,7 +2677,9 @@ def import_from_dae(filepath, verbose=False):
         mesh_vertex_y.append([])
         mesh_vertex_z.append([])
 
-        # 4. Isi data Transformasi Geometri (Vertex & UV)
+        # =================================================================
+        # 4. ISI DATA TRANSFORMATION GEOMETRI & DUMMY NORMALS (SAMA DENGAN MESH)
+        # =================================================================
         for j, (vx, vy, vz) in enumerate(vertices_norm):
             coord_x = vx
             coord_y = vz
@@ -2632,20 +2689,26 @@ def import_from_dae(filepath, verbose=False):
             mesh_vertex_y[i].append(orig_y)
             mesh_vertex_z[i].append(orig_z)
 
+            # --- DUMMY NORMAL (Selalu 0.0, 1.0, 0.0) ---
             mesh_normal_x[i].append(0.0)
             mesh_normal_y[i].append(1.0)
             mesh_normal_z[i].append(0.0)
 
-            u, v = uvs_norm[j] if j < len(uvs_norm) else (0.0, 0.0)
+            # UV & Color Mapping
+            if j < len(uvs_norm):
+                u, v = uvs_norm[j]
+            else:
+                u, v = 0.0, 0.0
             mesh_uv_u[i].append(u)
             mesh_uv_v[i].append(v)
+
             mesh_vertex_color[i].append((255, 255, 255, 255))
 
         for _ in range(internal_vertices_count):
             mesh_data[i].append(b'\x00' * mesh_data_lenght[i])
 
         # =================================================================
-        # 5. PARSE & RE-MAP BONE WEIGHTS SECARA SINKRON (FIXED)
+        # 5. PARSE & RE-MAP BONE WEIGHTS SECARA SINKRON
         # =================================================================
         geom_id = geom.get("id") or ""
         ctrl = None
@@ -2657,10 +2720,6 @@ def import_from_dae(filepath, verbose=False):
         if ctrl is None and geom_idx < len(controllers):
             ctrl = controllers[geom_idx]
 
-        # YOBJ menggunakan struktur: 
-        # mesh_bones = List berisi 8 Bone ID global yang digunakan oleh mesh ini
-        # mesh_bones_weight = List berisi array 8 float weight untuk tiap vertex, 
-        #                     berkorespondensi dengan 8 indeks di mesh_bones.
         current_mesh_bones = [0] * desired_slots
         current_mesh_weights = [[0.0] * desired_slots for _ in range(internal_vertices_count)]
 
@@ -2670,7 +2729,6 @@ def import_from_dae(filepath, verbose=False):
                 name_array_el = skin.find(".//c:Name_array", ns)
                 slot_names = name_array_el.text.strip().split() if (name_array_el is not None and name_array_el.text) else []
 
-                # Daftarkan semua ID bone global yang memengaruhi mesh ini
                 global_bone_ids = []
                 for nm in slot_names:
                     if nm.startswith("__pad_"):
@@ -2681,7 +2739,6 @@ def import_from_dae(filepath, verbose=False):
                         except (ValueError, NameError):
                             global_bone_ids.append(0)
 
-                # Ambil daftar float weight murni dari source
                 weight_values = []
                 for src in skin.findall("c:source", ns):
                     fa = src.find("c:float_array", ns)
@@ -2708,9 +2765,6 @@ def import_from_dae(filepath, verbose=False):
                         v_list = [int(x) for x in v_el.text.strip().split()]
 
                         dae_vertex_count = len(vcount_list)
-                        
-                        # Tampung sementara semua data bone & weight per vertex asli DAE
-                        # Format: dae_accumulated_weights[v_idx] = { global_bone_id: weight_value }
                         dae_accumulated_weights = [{} for _ in range(dae_vertex_count)]
 
                         cursor = 0
@@ -2726,19 +2780,16 @@ def import_from_dae(filepath, verbose=False):
                                 
                                 if 0 <= joint_local < len(global_bone_ids) and wval > 0.0:
                                     g_bone = global_bone_ids[joint_local]
-                                    # Akumulasikan jika ada duplikasi bone di vertex yang sama
                                     dae_accumulated_weights[dae_v_idx][g_bone] = dae_accumulated_weights[dae_v_idx].get(g_bone, 0.0) + wval
 
-                        # Koleksi unik bone yang benar-benar memiliki bobot/weight di mesh ini
                         mesh_wide_bones = set()
                         for v_dict in dae_accumulated_weights:
                             for g_bone, wval in v_dict.items():
-                                if wval > 0.01: # Threshold bone yang aktif
+                                if wval > 0.01:
                                     mesh_wide_bones.add(g_bone)
                         
                         mesh_wide_bones = sorted(list(mesh_wide_bones))
                         
-                        # Batasi total bone dalam satu mesh maksimal 8 sesuai alokasi slot YOBJ
                         if len(mesh_wide_bones) > desired_slots:
                             mesh_wide_bones = mesh_wide_bones[:desired_slots]
                         else:
@@ -2746,31 +2797,27 @@ def import_from_dae(filepath, verbose=False):
                         
                         current_mesh_bones = mesh_wide_bones
 
-                        # Sinkronisasi urutan index DAE asli ke index YOBJ yang baru
                         for (old_v_idx, old_vt_idx), new_index in index_map.items():
                             if 0 <= old_v_idx < dae_vertex_count and 0 <= new_index < internal_vertices_count:
                                 v_dict = dae_accumulated_weights[old_v_idx]
-                                
-                                # Petakan bobot ke 8 slot bone yang sudah kita tentukan di current_mesh_bones
                                 for slot_pos, g_bone in enumerate(current_mesh_bones):
                                     if g_bone in v_dict:
                                         current_mesh_weights[new_index][slot_pos] = v_dict[g_bone]
 
-                        # Normalisasi akhir (total weight per-vertex wajib = 1.0)
                         for vi in range(internal_vertices_count):
                             row = current_mesh_weights[vi]
                             total = sum(row)
                             if total > 0.0:
                                 current_mesh_weights[vi] = [float(w / total) for w in row]
                             else:
-                                # Fallback jika vertex tidak punya weight, pasang ke bone utama mesh
                                 current_mesh_weights[vi] = [1.0] + [0.0] * (desired_slots - 1)
 
         mesh_bones.append(current_mesh_bones)
         mesh_bones_weight.append(current_mesh_weights)
-        # =================================================================
 
-        # 6. Materials & faces setup
+        # =================================================================
+        # 6. Materials & faces setup (SAMA DENGAN MESH)
+        # =================================================================
         mesh_material_count.append(len(materials))
         mesh_material_texture.append([])
         mesh_material_faces_count.append([])
@@ -2797,6 +2844,7 @@ def import_from_dae(filepath, verbose=False):
                 mesh_face[i][j].append(triangle)
 
             tex_name_found = find_texture_name_for_material(root, mat_name, ns)
+
             if tex_name_found:
                 base = os.path.basename(tex_name_found)
                 name_no_ext = os.path.splitext(base)[0]
@@ -2805,15 +2853,17 @@ def import_from_dae(filepath, verbose=False):
 
             tex_name = name_no_ext.encode("ascii", errors="ignore").decode("ascii")
             tex_name = tex_name.replace("\x00", "").strip()[:16]
-            if "." in tex_name and tex_name.lower().endswith(("tga","png","jpg","jpeg","bmp","dds")):
+
+            if "." in tex_name and tex_name.lower().endswith(tuple(["tga","png","jpg","jpeg","bmp","dds"])):
                 tex_name = tex_name.rsplit(".", 1)[0][:16]
 
+            tex_name = tex_name[:16]
             texture.append(tex_name)
 
         if verbose:
             print(f"Mesh {i} Berhasil! Jumlah Vertex (mesh_data_count): {internal_vertices_count}")
             
-    return True#GUI
+    return True
 def reset_variables():
     global header, all_offset, mesh_count, bone_count, texture_count
     global mesh_header_start_offset, bones_start_offset, texture_offset, model_name_offset, model_count
